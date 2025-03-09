@@ -1,0 +1,78 @@
+name: Manual GCP Artifact Registry Build
+
+# This workflow only runs when manually triggered
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'GCP Region (e.g., us-central1)'
+        required: true
+        default: 'us-central1'
+      project_id:
+        description: 'GCP Project ID'
+        required: true
+      repository:
+        description: 'Artifact Registry Repository Name'
+        required: true
+      image_name:
+        description: 'Docker Image Name'
+        required: true
+      image_tag:
+        description: 'Docker Image Tag'
+        required: false
+        default: 'latest'
+      push_image:
+        description: 'Push image to registry?'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+      
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+      
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      
+    - name: Configure Docker for GCP Artifact Registry
+      run: |
+        gcloud auth configure-docker ${{ inputs.region }}-docker.pkg.dev
+        
+    - name: Build and push
+      id: docker_build
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: ${{ inputs.push_image == 'true' }}
+        tags: ${{ inputs.region }}-docker.pkg.dev/${{ inputs.project_id }}/${{ inputs.repository }}/${{ inputs.image_name }}:${{ inputs.image_tag }}
+        
+    - name: Image digest
+      run: |
+        echo "Image digest: ${{ steps.docker_build.outputs.digest }}"
+      
+    - name: Build summary
+      run: |
+        echo "### Build Complete! 🚀" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Registry:** ${{ inputs.region }}-docker.pkg.dev" >> $GITHUB_STEP_SUMMARY
+        echo "- **Project:** ${{ inputs.project_id }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Repository:** ${{ inputs.repository }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image:** ${{ inputs.image_name }}:${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Full Image Path:** ${{ inputs.region }}-docker.pkg.dev/${{ inputs.project_id }}/${{ inputs.repository }}/${{ inputs.image_name }}:${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Digest:** \`${{ steps.docker_build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Pushed:** ${{ inputs.push_image }}" >> $GITHUB_STEP_SUMMARY 
