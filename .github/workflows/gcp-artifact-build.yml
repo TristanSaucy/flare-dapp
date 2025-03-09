@@ -28,11 +28,11 @@ jobs:
       
     - name: Configure Docker for GCP Artifact Registry
       run: |
-        gcloud auth configure-docker central1-f-docker.pkg.dev
+        gcloud auth configure-docker us-central1-f-docker.pkg.dev
         
     - name: Build and push
       uses: docker/build-push-action@v4
       with:
         context: .
         push: ${{ github.event_name != 'pull_request' }}
-        tags: central1-f-docker.pkg.dev/onyx-sequencer-452900-i3/flare-dapp/flare-dapp:latest
+        tags: us-central1-f-docker.pkg.dev/onyx-sequencer-452900-i3/flare-dapp/flare-dapp:latest
