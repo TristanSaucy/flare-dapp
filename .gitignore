@@ -1,0 +1,8 @@
+# Ignore confidential space files
+salary.go
+confidential_space_commands.sh
+
+# Ignore environment files that might contain secrets
+.env
+.env.*
+.env.example
