@@ -1,0 +1,2 @@
+# No external dependencies required for the minimal application 
+google-cloud-logging==3.5.0 
