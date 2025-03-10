@@ -116,67 +116,6 @@ else
     print_info "Using image digest from .env: $IMAGE_DIGEST"
 fi
 
-# Verify service account has necessary roles
-print_section "Verifying Service Account Permissions"
-print_info "Checking if service account has necessary roles..."
-
-# Check for Confidential Space Workload User role
-if ! gcloud projects get-iam-policy "$PROJECT_ID" --format="json" | grep -q "roles/confidentialcomputing.workloadUser.*$SERVICE_ACCOUNT_EMAIL"; then
-    print_warning "Service account is missing the Confidential Space Workload User role"
-    print_info "Adding the Confidential Space Workload User role to $SERVICE_ACCOUNT_EMAIL"
-    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-        --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-        --role="roles/confidentialcomputing.workloadUser"
-else
-    print_success "Service account has the Confidential Space Workload User role"
-fi
-
-# Check for Service Account Token Creator role
-if ! gcloud projects get-iam-policy "$PROJECT_ID" --format="json" | grep -q "roles/iam.serviceAccountTokenCreator.*$SERVICE_ACCOUNT_EMAIL"; then
-    print_warning "Service account is missing the Service Account Token Creator role"
-    print_info "Adding the Service Account Token Creator role to $SERVICE_ACCOUNT_EMAIL"
-    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-        --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-        --role="roles/iam.serviceAccountTokenCreator"
-else
-    print_success "Service account has the Service Account Token Creator role"
-fi
-
-# Check for Artifact Registry Reader role
-if ! gcloud projects get-iam-policy "$PROJECT_ID" --format="json" | grep -q "roles/artifactregistry.reader.*$SERVICE_ACCOUNT_EMAIL"; then
-    print_warning "Service account is missing the Artifact Registry Reader role"
-    print_info "Adding the Artifact Registry Reader role to $SERVICE_ACCOUNT_EMAIL"
-    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-        --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-        --role="roles/artifactregistry.reader"
-else
-    print_success "Service account has the Artifact Registry Reader role"
-fi
-
-# Check for IAM Workload Identity Pool Admin role
-if ! gcloud projects get-iam-policy "$PROJECT_ID" --format="json" | grep -q "roles/iam.workloadIdentityPoolAdmin.*$SERVICE_ACCOUNT_EMAIL"; then
-    print_warning "Service account is missing the IAM Workload Identity Pool Admin role"
-    print_info "Adding the IAM Workload Identity Pool Admin role to $SERVICE_ACCOUNT_EMAIL"
-    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-        --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-        --role="roles/iam.workloadIdentityPoolAdmin"
-else
-    print_success "Service account has the IAM Workload Identity Pool Admin role"
-fi
-
-# Check for Storage Admin role
-if ! gcloud projects get-iam-policy "$PROJECT_ID" --format="json" | grep -q "roles/storage.admin.*$SERVICE_ACCOUNT_EMAIL"; then
-    print_warning "Service account is missing the Storage Admin role"
-    print_info "Adding the Storage Admin role to $SERVICE_ACCOUNT_EMAIL"
-    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-        --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-        --role="roles/storage.admin"
-else
-    print_success "Service account has the Storage Admin role"
-fi
-
-print_success "Service account permissions verified"
-
 # Set up Workload Identity Binding
 print_section "Setting up Workload Identity Binding"
 print_info "Creating workload identity binding"
@@ -211,7 +150,7 @@ fi
 
 # Create the VM if needed
 if [[ "$VM_CREATED" != "false" ]]; then
-    print_info "Creating VM with Confidential Computing enabled..."
+    print_info "Creating VM with Confidential Computing enabled in DEBUG mode..."
     
     # Create the VM with error handling
     if ! gcloud compute instances create "$VM_NAME" \
@@ -224,15 +163,15 @@ if [[ "$VM_CREATED" != "false" ]]; then
         --maintenance-policy=MIGRATE \
         --min-cpu-platform="AMD Milan" \
         --image-project=confidential-space-images \
-        --image-family=confidential-space \
+        --image-family=confidential-space-debug \
         --service-account="$SERVICE_ACCOUNT_EMAIL" \
-        --metadata="^~^tee-image-reference=$CONTAINER_IMAGE"; then
+        --metadata="^~^tee-image-reference=$CONTAINER_IMAGE~tee-container-log-redirect=true"; then
         
         print_error "Failed to create Confidential Space VM. Please check the error message above."
         exit 1
     fi
     
-    print_success "Confidential Space VM created successfully"
+    print_success "Confidential Space VM created successfully with DEBUG mode enabled"
 fi
 
 # Wait for VM to initialize
@@ -271,5 +210,5 @@ echo -e "The container is isolated and protected by hardware-based confidential 
 echo ""
 echo -e "${YELLOW}Troubleshooting:${NC}"
 echo -e "If your application isn't working as expected, check the logs using:"
-echo -e "${BOLD}gcloud logging read 'resource.type=gce_instance AND resource.labels.instance_id=$(gcloud compute instances describe $VM_NAME --zone=$REGION-a --format='value(id)')' --limit=50${NC}"
+echo -e "${BOLD}gcloud logging read \"resource.type=gce_instance AND resource.labels.instance_id=\$(gcloud compute instances describe $VM_NAME --zone=$REGION-a --format='value(id)')\" --limit=50${NC}"
 echo "" 

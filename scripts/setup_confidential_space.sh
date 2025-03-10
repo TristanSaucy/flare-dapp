@@ -270,41 +270,37 @@ gcloud iam service-accounts create "$SERVICE_ACCOUNT_NAME" \
 SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 print_success "Service account created: $SERVICE_ACCOUNT_EMAIL"
 
-# Grant Workload Identity User role to the service account
+# Function to add a role
+ensure_role() {
+    local role=$1
+    local role_display_name=$2
+    
+    print_info "Granting $role_display_name role to $SERVICE_ACCOUNT_EMAIL"
+    
+    # Add the role and handle errors
+    if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+        --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
+        --role="$role" --quiet; then
+        print_success "Granted $role_display_name role to service account"
+    else
+        print_warning "Failed to add $role_display_name role. This may cause issues."
+    fi
+}
+
+# Set up workload identity binding for Confidential Space
+print_info "Setting up workload identity binding for Confidential Space"
 gcloud iam service-accounts add-iam-policy-binding \
-    $SERVICE_ACCOUNT_NAME_1@$PROJECT_ID_1.iam.gserviceaccount.com \
-    --member="principalSet://iam.googleapis.com/projects/$PROJECT_ID_1/locations/global/workloadIdentityPools/$POOL_NAME_1/attribute.swname/CONFIDENTIAL_SPACE" \
-    --role="roles/iam.workloadIdentityUser"
+    "$SERVICE_ACCOUNT_EMAIL" \
+    --member="principalSet://iam.googleapis.com/projects/$PROJECT_ID/locations/global/workloadIdentityPools/$POOL_NAME/attribute.tee_identity/CONFIDENTIAL_SPACE" \
+    --role="roles/iam.workloadIdentityUser" --quiet || true
 
-# Grant Confidential Space Workload User role to the service account
-print_info "Granting Confidential Space Workload User role to $SERVICE_ACCOUNT_EMAIL"
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-    --role="roles/confidentialcomputing.workloadUser"
-
-# Grant Service Account Token Creator role to the service account
-print_info "Granting Service Account Token Creator role to $SERVICE_ACCOUNT_EMAIL"
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-    --role="roles/iam.serviceAccountTokenCreator"
-
-# Grant Artifact Registry Reader role to the service account
-print_info "Granting Artifact Registry Reader role to $SERVICE_ACCOUNT_EMAIL"
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-    --role="roles/artifactregistry.reader"
-
-# Grant IAM Workload Identity Pool Admin role to the service account
-print_info "Granting IAM Workload Identity Pool Admin role to $SERVICE_ACCOUNT_EMAIL"
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-    --role="roles/iam.workloadIdentityPoolAdmin"
-
-# Grant Storage Admin role to the service account
-print_info "Granting Storage Admin role to $SERVICE_ACCOUNT_EMAIL"
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-    --role="roles/storage.admin"
+# Ensure all required roles
+ensure_role "roles/confidentialcomputing.workloadUser" "Confidential Space Workload User"
+ensure_role "roles/iam.serviceAccountTokenCreator" "Service Account Token Creator"
+ensure_role "roles/artifactregistry.reader" "Artifact Registry Reader"
+ensure_role "roles/iam.workloadIdentityPoolAdmin" "IAM Workload Identity Pool Admin"
+ensure_role "roles/storage.admin" "Storage Admin"
+ensure_role "roles/logging.logWriter" "Logging Writer"
 
 print_success "Service account permissions set up"
 

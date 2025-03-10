@@ -185,33 +185,33 @@ fi
 
 print_success "Configuration updated"
 
-# Check if we need to update the attestation verifier
+# Update the attestation verifier
 ATTESTATION_UPDATED=false
 if [[ ! -z "$IMAGE_DIGEST" ]]; then
     print_section "Attestation Verification"
     print_info "The image digest has been saved to the .env file."
-    read -p "Do you want to update the attestation verifier with this digest? (y/n, default: y): " UPDATE_ATTESTATION
-    UPDATE_ATTESTATION=${UPDATE_ATTESTATION:-y}
+    print_info "Updating the attestation verifier with this digest..."
     
-    if [[ "$UPDATE_ATTESTATION" == "y" ]]; then
-        # Check if update_attestation.sh exists and is executable
-        if [ ! -f "scripts/update_attestation.sh" ]; then
-            print_error "Attestation update script not found: scripts/update_attestation.sh"
-        else
-            # Make the script executable if it's not already
-            if [ ! -x "scripts/update_attestation.sh" ]; then
-                print_info "Making attestation update script executable"
-                chmod +x scripts/update_attestation.sh
-            fi
-            
-            print_info "Updating attestation verifier..."
-            ./scripts/update_attestation.sh
-            ATTESTATION_UPDATED=true
-        fi
+    # Check if update_attestation.sh exists and is executable
+    if [ ! -f "scripts/update_attestation.sh" ]; then
+        print_error "Attestation update script not found: scripts/update_attestation.sh"
+        print_warning "The attestation verifier was not updated. This will prevent your application from running correctly."
+        print_info "Please create the scripts/update_attestation.sh script or run the setup script again."
     else
-        print_info "Skipping attestation verifier update."
-        print_info "You can update it later by running: ${BOLD}./scripts/update_attestation.sh${NC}"
+        # Make the script executable if it's not already
+        if [ ! -x "scripts/update_attestation.sh" ]; then
+            print_info "Making attestation update script executable"
+            chmod +x scripts/update_attestation.sh
+        fi
+        
+        print_info "Updating attestation verifier..."
+        ./scripts/update_attestation.sh
+        ATTESTATION_UPDATED=true
     fi
+else
+    print_warning "No image digest was obtained. The attestation verifier cannot be updated."
+    print_warning "This will prevent your application from running correctly in Confidential Space."
+    print_info "Please try rebuilding the container to obtain a valid image digest."
 fi
 
 # Summary
@@ -224,12 +224,6 @@ if [[ ! -z "$IMAGE_DIGEST" ]]; then
 fi
 echo -e "${BOLD}Project ID:${NC} $PROJECT_ID"
 echo ""
-
-if [[ "$ATTESTATION_UPDATED" != "true" && ! -z "$IMAGE_DIGEST" ]]; then
-    echo -e "${YELLOW}Important:${NC} For proper attestation verification, you should update the attestation verifier"
-    echo -e "with this image digest by running: ${BOLD}./scripts/update_attestation.sh${NC}"
-    echo ""
-fi
 
 # Ask if user wants to deploy
 echo -e "Would you like to deploy this container to a Confidential Space VM now?"
