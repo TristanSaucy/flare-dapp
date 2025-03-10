@@ -47,6 +47,8 @@ Confidential Space is a Google Cloud solution that enables secure multi-party co
   - `build_and_push_container.sh`: Script to build and push the Docker container
   - `deploy_confidential_space.sh`: Script to deploy the application to a Confidential Space VM
   - `update_attestation.sh`: Script to update the attestation verifier with a new image digest
+  - `monitor_cs_vm.sh`: Interactive script to monitor a Confidential Space VM
+  - `rebuild_and_redeploy.sh`: Script to quickly rebuild and redeploy after making changes
 
 ## Detailed Setup Instructions
 
@@ -81,6 +83,18 @@ If you prefer to run each step manually instead of using the guided setup:
    ```
    ./scripts/update_attestation.sh
    ```
+
+5. Monitor your Confidential Space VM:
+   ```
+   ./scripts/monitor_cs_vm.sh
+   ```
+   This interactive script provides various options to monitor your VM and view logs.
+
+6. Rebuild and redeploy after making changes:
+   ```
+   ./scripts/rebuild_and_redeploy.sh
+   ```
+   This script streamlines the process of rebuilding and redeploying your application.
 
 ## How It Works
 
@@ -123,7 +137,37 @@ If you encounter issues:
    ```
    gcloud logging read "resource.type=gce_instance AND resource.labels.instance_id=$(gcloud compute instances describe <vm-name> --zone=<zone> --format='value(id)')"
    ```
+
+## Monitoring Confidential Space
+
+Since you cannot SSH into a Confidential Space VM, use these methods to monitor your application:
+
+1. **View serial port output** (most useful for boot and initialization issues):
+   ```bash
+   gcloud compute instances get-serial-port-output <vm-name> --zone=<zone> | tail -n 100
    ```
+
+2. **Check Cloud Logging** (for application logs):
+   ```bash
+   # Basic logs
+   gcloud logging read "resource.type=gce_instance AND resource.labels.instance_id=$(gcloud compute instances describe <vm-name> --zone=<zone> --format='value(id)')" --limit=50
+   
+   # Filter for specific severity
+   gcloud logging read "resource.type=gce_instance AND severity>=ERROR AND resource.labels.instance_id=$(gcloud compute instances describe <vm-name> --zone=<zone> --format='value(id)')" --limit=20
+   
+   # Stream logs in real-time
+   gcloud logging read "resource.type=gce_instance AND resource.labels.instance_id=$(gcloud compute instances describe <vm-name> --zone=<zone> --format='value(id)')" --limit=10 --format='default' --freshness=1d --follow
+   ```
+
+3. **Check container status** through the TEE guest agent logs:
+   ```bash
+   gcloud logging read "resource.type=gce_instance AND logName:projects/<project-id>/logs/tee-guest-agent AND resource.labels.instance_id=$(gcloud compute instances describe <vm-name> --zone=<zone> --format='value(id)')" --limit=20
+   ```
+
+4. **Monitor VM health metrics** in Cloud Monitoring:
+   - Navigate to Cloud Monitoring in the Google Cloud Console
+   - Create a dashboard for your VM with CPU, memory, and disk metrics
+   - Set up alerts for any anomalies
 
 ## License
 
