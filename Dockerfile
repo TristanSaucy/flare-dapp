@@ -1,7 +1,15 @@
-FROM alpine:latest
+FROM python:3.9-slim
+
 WORKDIR /app
+
+# Install required packages
+RUN pip install --no-cache-dir google-cloud-storage google-cloud-kms
+
+# Copy application files
 COPY . /app
-# Update this to point to your actual entry point or executable
-# ENTRYPOINT ["/app/your-actual-executable"]
-# For now, just use a simple command to keep the container running
-CMD ["tail", "-f", "/dev/null"]
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+
+# Entry point for the application
+ENTRYPOINT ["python", "main.py"]
