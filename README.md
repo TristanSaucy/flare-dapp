@@ -1,5 +1,13 @@
 # Confidential Space Application
 
+## Prerequisites
+
+- Google Cloud SDK (gcloud)
+- Docker
+- Python 3.9+
+- A Google Cloud account with billing enabled
+
+  
 ## Quick Start
 
 ```bash
@@ -39,13 +47,6 @@ Confidential Space is a Google Cloud solution that enables secure multi-party co
   - `build_and_push_container.sh`: Script to build and push the Docker container
   - `deploy_confidential_space.sh`: Script to deploy the application to a Confidential Space VM
   - `update_attestation.sh`: Script to update the attestation verifier with a new image digest
-
-## Prerequisites
-
-- Google Cloud SDK (gcloud)
-- Docker
-- Python 3.9+
-- A Google Cloud account with billing enabled
 
 ## Detailed Setup Instructions
 
