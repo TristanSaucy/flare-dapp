@@ -252,7 +252,7 @@ def get_gemini_response(prompt):
         log_message("INFO", f"Sending prompt to Gemini (length: {len(prompt)})")
         
         # Get a Vertex AI Gemini model
-        model_name = "gemini-pro"  # Use gemini-pro model
+        model_name = "gemini-2.0-pro-exp-02-05"  # Use the experimental Gemini 2.0 Pro model
         log_message("DEBUG", f"Creating model instance for {model_name}")
         
         # Set up generation config
