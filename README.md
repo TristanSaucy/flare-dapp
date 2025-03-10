@@ -32,7 +32,6 @@ Confidential Space is a Google Cloud solution that enables secure multi-party co
 ## Project Structure
 
 - `main.py`: The main Python application that runs in the Confidential Space
-- `env_setup.py`: Utility for loading environment variables
 - `Dockerfile`: Container definition for the application
 - `requirements.txt`: Python dependencies
 - `scripts/`: Directory containing all the scripts for setup and deployment
