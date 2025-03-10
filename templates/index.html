@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confidential Space Application</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        .status {
+            background-color: #e8f4f8;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .status-item {
+            margin-bottom: 10px;
+        }
+        .status-label {
+            font-weight: bold;
+            display: inline-block;
+            width: 200px;
+        }
+        .success {
+            color: #27ae60;
+        }
+        .warning {
+            color: #e67e22;
+        }
+        .error {
+            color: #e74c3c;
+        }
+        .logs {
+            background-color: #2c3e50;
+            color: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: monospace;
+            height: 200px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        .log-entry {
+            margin-bottom: 5px;
+            border-bottom: 1px solid #34495e;
+            padding-bottom: 5px;
+        }
+        .refresh {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .refresh:hover {
+            background-color: #2980b9;
+        }
+        .nav-links {
+            margin-bottom: 20px;
+        }
+        .nav-links a {
+            color: #3498db;
+            text-decoration: none;
+            margin-right: 15px;
+        }
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="nav-links">
+            <a href="/">Dashboard</a>
+            <a href="/chat">Gemini Chat</a>
+        </div>
+        
+        <h1>Confidential Space Application</h1>
+        
+        <div class="status">
+            <h2>Application Status</h2>
+            <div class="status-item">
+                <span class="status-label">Status:</span>
+                <span class="success">Running</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Key Retrieval:</span>
+                <span class="{% if key_retrieved %}success{% else %}error{% endif %}">
+                    {% if key_retrieved %}Successfully retrieved and decrypted{% else %}Not retrieved{% endif %}
+                </span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Uptime:</span>
+                <span>{{ uptime }}</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Heartbeat Count:</span>
+                <span>{{ heartbeat_count }}</span>
+            </div>
+        </div>
+        
+        <h2>Configuration</h2>
+        <div class="status">
+            <div class="status-item">
+                <span class="status-label">Input Bucket:</span>
+                <span>{{ input_bucket }}</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Key Object:</span>
+                <span>{{ key_object }}</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Project ID:</span>
+                <span>{{ project_id }}</span>
+            </div>
+        </div>
+        
+        <h2>Recent Logs</h2>
+        <div class="logs">
+            {% for log in logs %}
+            <div class="log-entry">{{ log }}</div>
+            {% endfor %}
+        </div>
+        
+        <form action="/" method="get">
+            <button type="submit" class="refresh">Refresh</button>
+        </form>
+    </div>
+</body>
+</html> 

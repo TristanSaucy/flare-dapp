@@ -159,6 +159,13 @@ if [[ "$VM_CREATED" != "false" ]]; then
     METADATA="^~^tee-image-reference=$CONTAINER_IMAGE"
     METADATA="${METADATA}~tee-container-log-redirect=true"
     
+    # Always add PROJECT_ID and REGION for Vertex AI
+    METADATA="${METADATA}~PROJECT_ID=$PROJECT_ID"
+    print_info "Added PROJECT_ID to metadata"
+    
+    METADATA="${METADATA}~REGION=$REGION"
+    print_info "Added REGION to metadata"
+    
     # Add environment variables from .env
     if [ ! -z "$INPUT_BUCKET_NAME" ]; then
         METADATA="${METADATA}~INPUT_BUCKET_NAME=$INPUT_BUCKET_NAME"
@@ -185,6 +192,21 @@ if [[ "$VM_CREATED" != "false" ]]; then
         print_info "Added POOL_NAME to metadata"
     fi
     
+    # Ask for Gemini API key
+    print_info "The application uses the Gemini API for chat functionality"
+    read -p "Enter your Gemini API key (leave empty to skip): " GEMINI_API_KEY
+    
+    if [ ! -z "$GEMINI_API_KEY" ]; then
+        METADATA="${METADATA}~GEMINI_API_KEY=$GEMINI_API_KEY"
+        print_info "Added GEMINI_API_KEY to metadata"
+    else
+        print_warning "No Gemini API key provided. Chat functionality will be limited."
+    fi
+    
+    # Note about Gemini API
+    print_info "Using Google's Gemini API for chat functionality"
+    print_info "You can get an API key from https://makersuite.google.com/app/apikey"
+    
     # Create the VM with error handling
     if ! gcloud compute instances create "$VM_NAME" \
         --project="$PROJECT_ID" \
@@ -206,6 +228,50 @@ if [[ "$VM_CREATED" != "false" ]]; then
     
     print_success "Confidential Space VM created successfully with DEBUG mode enabled"
     print_info "Environment variables have been passed as metadata to the VM"
+    
+    # Create a firewall rule to allow access to the web server
+    print_section "Setting up Firewall Rule"
+    FIREWALL_RULE_NAME="allow-web-$VM_NAME"
+    
+    # Check if the firewall rule already exists
+    if gcloud compute firewall-rules describe "$FIREWALL_RULE_NAME" --project="$PROJECT_ID" &> /dev/null; then
+        print_info "Firewall rule '$FIREWALL_RULE_NAME' already exists"
+    else
+        print_info "Creating firewall rule to allow web access on port 8080..."
+        if gcloud compute firewall-rules create "$FIREWALL_RULE_NAME" \
+            --project="$PROJECT_ID" \
+            --direction=INGRESS \
+            --priority=1000 \
+            --network=default \
+            --action=ALLOW \
+            --rules=tcp:8080 \
+            --source-ranges=0.0.0.0/0 \
+            --target-tags="$VM_NAME"; then
+            print_success "Firewall rule created successfully"
+        else
+            print_warning "Failed to create firewall rule. You may need to manually allow access to port 8080."
+        fi
+    fi
+    
+    # Add network tag to the VM for the firewall rule
+    print_info "Adding network tag to VM..."
+    gcloud compute instances add-tags "$VM_NAME" \
+        --project="$PROJECT_ID" \
+        --zone="$REGION-a" \
+        --tags="$VM_NAME"
+    
+    # Get the external IP of the VM
+    EXTERNAL_IP=$(gcloud compute instances describe "$VM_NAME" \
+        --project="$PROJECT_ID" \
+        --zone="$REGION-a" \
+        --format="value(networkInterfaces[0].accessConfigs[0].natIP)")
+    
+    if [ ! -z "$EXTERNAL_IP" ]; then
+        print_success "VM external IP: $EXTERNAL_IP"
+        print_info "Web interface will be available at: http://$EXTERNAL_IP:8080"
+    else
+        print_warning "Could not determine VM external IP"
+    fi
 fi
 
 # Wait for VM to initialize
@@ -233,11 +299,20 @@ if [ ! -z "$IMAGE_DIGEST" ]; then
     echo -e "${BOLD}Image Digest:${NC} $IMAGE_DIGEST"
 fi
 echo -e "${BOLD}Service Account:${NC} $SERVICE_ACCOUNT_EMAIL"
+
+# Display web interface URL if available
+if [ ! -z "$EXTERNAL_IP" ]; then
+    echo -e "${BOLD}Web Interface:${NC} http://$EXTERNAL_IP:8080"
+fi
+
 echo ""
 echo -e "${YELLOW}Next steps:${NC}"
 echo -e "1. Check VM status: ${BOLD}gcloud compute instances describe $VM_NAME --zone=$REGION-a${NC}"
 echo -e "2. View logs: ${BOLD}gcloud compute instances get-serial-port-output $VM_NAME --zone=$REGION-a${NC}"
 echo -e "3. SSH into the VM (for debugging): ${BOLD}gcloud compute ssh $VM_NAME --zone=$REGION-a${NC}"
+if [ ! -z "$EXTERNAL_IP" ]; then
+    echo -e "4. Access the web interface: ${BOLD}http://$EXTERNAL_IP:8080${NC}"
+fi
 echo ""
 echo -e "${YELLOW}Note:${NC} The application is running in a Confidential Space environment."
 echo -e "The container is isolated and protected by hardware-based confidential computing."

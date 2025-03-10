@@ -128,15 +128,24 @@ else
     print_info "Billing is not enabled for this project"
     print_info "You need to enable billing to continue"
     
-    # List available billing accounts
-    list_billing_accounts
+    # Try to get the only available billing account
+    BILLING_ACCOUNT_ID=$(gcloud billing accounts list --format="value(name.basename())" | head -n 1)
+    ACCOUNT_COUNT=$(gcloud billing accounts list --format="value(name.basename())" | wc -l)
     
-    # Ask for billing account ID
-    read -p "Enter the billing account ID to use (e.g., 01D123-456789-ABCDEF): " BILLING_ACCOUNT_ID
-    
-    if [[ -z "$BILLING_ACCOUNT_ID" ]]; then
-        print_error "Billing account ID cannot be empty"
-        exit 1
+    if [ "$ACCOUNT_COUNT" -eq 1 ]; then
+        print_info "Found a single billing account: $BILLING_ACCOUNT_ID"
+        print_info "Using this account automatically"
+    else
+        # List available billing accounts
+        list_billing_accounts
+        
+        # Ask for billing account ID
+        read -p "Enter the billing account ID to use (e.g., 01D123-456789-ABCDEF): " BILLING_ACCOUNT_ID
+        
+        if [[ -z "$BILLING_ACCOUNT_ID" ]]; then
+            print_error "Billing account ID cannot be empty"
+            exit 1
+        fi
     fi
     
     # Link the billing account
@@ -187,6 +196,7 @@ APIS=(
     "iamcredentials.googleapis.com"
     "confidentialcomputing.googleapis.com"
     "compute.googleapis.com"
+    "aiplatform.googleapis.com"
 )
 
 # Enable each API
@@ -206,6 +216,10 @@ REGION=${REGION:-us-central1}
 # Ask for service account name
 read -p "Enter service account name (default: cs-service-account): " SERVICE_ACCOUNT_NAME
 SERVICE_ACCOUNT_NAME=${SERVICE_ACCOUNT_NAME:-cs-service-account}
+
+# Ask for workload identity pool name
+read -p "Enter workload identity pool name (default: cs-pool): " POOL_NAME
+POOL_NAME=${POOL_NAME:-cs-pool}
 
 # Ask for KMS keyring name
 read -p "Enter KMS keyring name (default: cs-keyring): " KEYRING_NAME
@@ -270,6 +284,44 @@ gcloud iam service-accounts create "$SERVICE_ACCOUNT_NAME" \
 SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 print_success "Service account created: $SERVICE_ACCOUNT_EMAIL"
 
+# Create workload identity pool for confidential space
+print_section "Setting up Workload Identity for Confidential Space"
+print_info "Creating workload identity pool"
+gcloud iam workload-identity-pools create "$POOL_NAME" \
+    --location=global || true
+
+# Create provider for the pool with basic attestation conditions
+print_info "Creating provider for the pool with attestation verification"
+
+# Basic attestation condition without image digest
+ATTESTATION_CONDITION="'$SERVICE_ACCOUNT_EMAIL' in assertion.google_service_accounts \
+&& assertion.swname == 'CONFIDENTIAL_SPACE' \
+&& 'STABLE' in assertion.submods.confidential_space.support_attributes"
+
+# Base command for creating the provider
+PROVIDER_CMD="gcloud iam workload-identity-pools providers create-oidc attestation-verifier \
+    --location=global \
+    --workload-identity-pool=\"$POOL_NAME\" \
+    --issuer-uri=\"https://confidentialcomputing.googleapis.com/\" \
+    --allowed-audiences=\"https://sts.googleapis.com\" \
+    --attribute-mapping=\"google.subject=assertion.sub\" \
+    --attribute-condition=\"$ATTESTATION_CONDITION\""
+
+print_info "The attestation will be created without image verification."
+print_info "You should update the attestation verifier after building and pushing your container."
+
+# Execute the command
+eval $PROVIDER_CMD || true
+
+print_success "Workload identity pool and provider created"
+
+# Set up workload identity binding for Confidential Space
+print_info "Setting up workload identity binding for Confidential Space"
+gcloud iam service-accounts add-iam-policy-binding \
+    "$SERVICE_ACCOUNT_EMAIL" \
+    --member="principalSet://iam.googleapis.com/projects/$PROJECT_ID/locations/global/workloadIdentityPools/$POOL_NAME/attribute.tee_identity/CONFIDENTIAL_SPACE" \
+    --role="roles/iam.workloadIdentityUser" --quiet || true
+
 # Function to add a role
 ensure_role() {
     local role=$1
@@ -287,16 +339,11 @@ ensure_role() {
     fi
 }
 
-# Set up workload identity binding for Confidential Space
-print_info "Setting up workload identity binding for Confidential Space"
-gcloud iam service-accounts add-iam-policy-binding \
-    "$SERVICE_ACCOUNT_EMAIL" \
-    --member="principalSet://iam.googleapis.com/projects/$PROJECT_ID/locations/global/workloadIdentityPools/$POOL_NAME/attribute.tee_identity/CONFIDENTIAL_SPACE" \
-    --role="roles/iam.workloadIdentityUser" --quiet || true
-
 # Ensure all required roles
 ensure_role "roles/confidentialcomputing.workloadUser" "Confidential Space Workload User"
 ensure_role "roles/iam.serviceAccountTokenCreator" "Service Account Token Creator"
+ensure_role "roles/aiplatform.user" "Vertex AI User"
+ensure_role "roles/aiplatform.serviceAgent" "Vertex AI Service Agent"
 ensure_role "roles/artifactregistry.reader" "Artifact Registry Reader"
 ensure_role "roles/iam.workloadIdentityPoolAdmin" "IAM Workload Identity Pool Admin"
 ensure_role "roles/storage.admin" "Storage Admin"
@@ -339,59 +386,6 @@ gsutil iam ch "serviceAccount:$SERVICE_ACCOUNT_EMAIL:objectCreator" "gs://$RESUL
 
 print_success "Storage buckets created and permissions set"
 
-# Create workload identity pool for confidential space
-print_section "Setting up Workload Identity for Confidential Space"
-print_info "Creating workload identity pool"
-POOL_NAME="cs-pool"
-gcloud iam workload-identity-pools create "$POOL_NAME" \
-    --location=global || true
-
-# Check if we have an image digest for attestation
-IMAGE_DIGEST=""
-if [ -f .env ] && grep -q "IMAGE_DIGEST=" .env; then
-    source .env
-    if [ ! -z "$IMAGE_DIGEST" ]; then
-        print_info "Found image digest in .env: $IMAGE_DIGEST"
-    fi
-fi
-
-# Create provider for the pool with attestation conditions
-print_info "Creating provider for the pool with attestation verification"
-
-# Base command for creating the provider
-PROVIDER_CMD="gcloud iam workload-identity-pools providers create-oidc attestation-verifier \
-    --location=global \
-    --workload-identity-pool=\"$POOL_NAME\" \
-    --issuer-uri=\"https://confidentialcomputing.googleapis.com/\" \
-    --allowed-audiences=\"https://sts.googleapis.com\" \
-    --attribute-mapping=\"google.subject=assertion.sub\""
-
-# Add attestation conditions if we have an image digest
-if [ ! -z "$IMAGE_DIGEST" ]; then
-    # Full attestation condition with image digest
-    ATTESTATION_CONDITION="assertion.submods.container.image_digest == 'sha256:$IMAGE_DIGEST' \
-&& '$SERVICE_ACCOUNT_EMAIL' in assertion.google_service_accounts \
-&& assertion.swname == 'CONFIDENTIAL_SPACE' \
-&& 'STABLE' in assertion.submods.confidential_space.support_attributes"
-    
-    PROVIDER_CMD="$PROVIDER_CMD --attribute-condition=\"$ATTESTATION_CONDITION\""
-else
-    # Basic attestation condition without image digest
-    ATTESTATION_CONDITION="'$SERVICE_ACCOUNT_EMAIL' in assertion.google_service_accounts \
-&& assertion.swname == 'CONFIDENTIAL_SPACE' \
-&& 'STABLE' in assertion.submods.confidential_space.support_attributes"
-    
-    PROVIDER_CMD="$PROVIDER_CMD --attribute-condition=\"$ATTESTATION_CONDITION\""
-    
-    print_info "No image digest available. The attestation will be created without image verification."
-    print_info "You should update the attestation verifier after building and pushing your container."
-fi
-
-# Execute the command
-eval $PROVIDER_CMD || true
-
-print_success "Workload identity setup completed"
-
 # Create a sample key file for demonstration
 print_section "Creating Sample Key File"
 print_info "Creating a sample key file for demonstration"
@@ -415,8 +409,45 @@ print_success "Sample key file created, encrypted, and uploaded"
 
 # Create .env file
 print_section "Creating Environment File"
-print_info "Creating .env file with configuration"
 
+# Check if .env file already exists
+if [ -f .env ]; then
+    print_info "An existing .env file was found"
+    read -p "Do you want to keep the existing values? (y/n, default: n): " KEEP_ENV
+    KEEP_ENV=${KEEP_ENV:-n}
+    
+    if [[ "$KEEP_ENV" == "y" ]]; then
+        print_info "Loading values from existing .env file"
+        
+        # Source the existing .env file
+        source .env
+        
+        # Display the loaded values
+        print_info "Loaded values from existing .env file:"
+        echo "PROJECT_ID: $PROJECT_ID"
+        echo "REGION: $REGION"
+        echo "SERVICE_ACCOUNT_NAME: $SERVICE_ACCOUNT_NAME"
+        echo "SERVICE_ACCOUNT_EMAIL: $SERVICE_ACCOUNT_EMAIL"
+        echo "POOL_NAME: $POOL_NAME"
+        echo "INPUT_BUCKET_NAME: $INPUT_BUCKET_NAME"
+        echo "RESULTS_BUCKET_NAME: $RESULTS_BUCKET_NAME"
+        
+        # Create a backup of the old .env file
+        cp .env .env.bak
+        print_info "Backed up old .env to .env.bak"
+        
+        print_info "Updating .env file with new configuration"
+    else
+        print_info "Creating new .env file"
+        # Backup the old .env file
+        cp .env .env.bak
+        print_info "Backed up old .env to .env.bak"
+    fi
+else
+    print_info "Creating new .env file"
+fi
+
+# Write to .env file
 cat > .env << EOF
 # Project configuration
 PROJECT_ID="$PROJECT_ID"
@@ -440,12 +471,7 @@ KEY_OBJECT_NAME="$KEY_OBJECT_NAME"
 POOL_NAME="$POOL_NAME"
 EOF
 
-# Add IMAGE_DIGEST to .env if available
-if [ ! -z "$IMAGE_DIGEST" ]; then
-    echo "IMAGE_DIGEST=\"$IMAGE_DIGEST\"" >> .env
-fi
-
-print_success ".env file created with your configuration"
+print_success ".env file created/updated with your configuration"
 
 # Summary
 print_section "Setup Complete"
@@ -491,5 +517,5 @@ else
     echo -e "When you're ready to build and deploy, run the following commands:"
     echo -e "1. Build and push your Docker container: ${BOLD}./scripts/build_and_push_container.sh${NC}"
     echo -e "2. Or deploy directly if you already have a container: ${BOLD}./scripts/deploy_confidential_space.sh${NC}"
-    echo "" 
+    echo ""
 fi 
