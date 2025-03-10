@@ -6,3 +6,4 @@ confidential_space_commands.sh
 .env
 .env.*
 .env.example
+deploy_script.sh
