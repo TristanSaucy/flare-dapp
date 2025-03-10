@@ -152,6 +152,39 @@ fi
 if [[ "$VM_CREATED" != "false" ]]; then
     print_info "Creating VM with Confidential Computing enabled in DEBUG mode..."
     
+    # Prepare metadata for the VM
+    print_info "Preparing environment variables as metadata..."
+    
+    # Start with required TEE metadata
+    METADATA="^~^tee-image-reference=$CONTAINER_IMAGE"
+    METADATA="${METADATA}~tee-container-log-redirect=true"
+    
+    # Add environment variables from .env
+    if [ ! -z "$INPUT_BUCKET_NAME" ]; then
+        METADATA="${METADATA}~INPUT_BUCKET_NAME=$INPUT_BUCKET_NAME"
+        print_info "Added INPUT_BUCKET_NAME to metadata"
+    fi
+    
+    if [ ! -z "$RESULTS_BUCKET_NAME" ]; then
+        METADATA="${METADATA}~RESULTS_BUCKET_NAME=$RESULTS_BUCKET_NAME"
+        print_info "Added RESULTS_BUCKET_NAME to metadata"
+    fi
+    
+    if [ ! -z "$KEY_OBJECT_NAME" ]; then
+        METADATA="${METADATA}~KEY_OBJECT_NAME=$KEY_OBJECT_NAME"
+        print_info "Added KEY_OBJECT_NAME to metadata"
+    fi
+    
+    if [ ! -z "$KMS_KEY_NAME" ]; then
+        METADATA="${METADATA}~KMS_KEY_NAME=$KMS_KEY_NAME"
+        print_info "Added KMS_KEY_NAME to metadata"
+    fi
+    
+    if [ ! -z "$POOL_NAME" ]; then
+        METADATA="${METADATA}~POOL_NAME=$POOL_NAME"
+        print_info "Added POOL_NAME to metadata"
+    fi
+    
     # Create the VM with error handling
     if ! gcloud compute instances create "$VM_NAME" \
         --project="$PROJECT_ID" \
@@ -165,13 +198,14 @@ if [[ "$VM_CREATED" != "false" ]]; then
         --image-project=confidential-space-images \
         --image-family=confidential-space-debug \
         --service-account="$SERVICE_ACCOUNT_EMAIL" \
-        --metadata="^~^tee-image-reference=$CONTAINER_IMAGE~tee-container-log-redirect=true"; then
+        --metadata="$METADATA"; then
         
         print_error "Failed to create Confidential Space VM. Please check the error message above."
         exit 1
     fi
     
     print_success "Confidential Space VM created successfully with DEBUG mode enabled"
+    print_info "Environment variables have been passed as metadata to the VM"
 fi
 
 # Wait for VM to initialize
