@@ -192,20 +192,6 @@ if [[ "$VM_CREATED" != "false" ]]; then
         print_info "Added POOL_NAME to metadata"
     fi
     
-    # Ask for Gemini API key
-    print_info "The application uses the Gemini API for chat functionality"
-    read -p "Enter your Gemini API key (leave empty to skip): " GEMINI_API_KEY
-    
-    if [ ! -z "$GEMINI_API_KEY" ]; then
-        METADATA="${METADATA}~GEMINI_API_KEY=$GEMINI_API_KEY"
-        print_info "Added GEMINI_API_KEY to metadata"
-    else
-        print_warning "No Gemini API key provided. Chat functionality will be limited."
-    fi
-    
-    # Note about Gemini API
-    print_info "Using Google's Gemini API for chat functionality"
-    print_info "You can get an API key from https://makersuite.google.com/app/apikey"
     
     # Create the VM with error handling
     if ! gcloud compute instances create "$VM_NAME" \

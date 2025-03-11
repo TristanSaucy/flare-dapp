@@ -7,3 +7,4 @@ confidential_space_commands.sh
 .env.*
 .env.example
 deploy_script.sh
+generative-reference.py

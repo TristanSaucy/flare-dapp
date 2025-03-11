@@ -3,54 +3,36 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Confidential Space - Gemini Chat</title>
+    <title>Chat with Gemini</title>
     <style>
         body {
             font-family: Arial, sans-serif;
-            line-height: 1.6;
-            margin: 0;
-            padding: 20px;
-            background-color: #f5f5f5;
-            color: #333;
-        }
-        .container {
             max-width: 800px;
             margin: 0 auto;
-            background-color: white;
             padding: 20px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #2c3e50;
-            border-bottom: 2px solid #3498db;
-            padding-bottom: 10px;
         }
         .chat-container {
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 10px;
             height: 400px;
             overflow-y: auto;
-            border: 1px solid #ddd;
-            padding: 10px;
-            margin-bottom: 20px;
+            margin-bottom: 10px;
             background-color: #f9f9f9;
-            border-radius: 5px;
         }
         .message {
-            margin-bottom: 15px;
-            padding: 10px;
+            margin-bottom: 10px;
+            padding: 8px 12px;
             border-radius: 5px;
             max-width: 80%;
-            word-wrap: break-word;
         }
         .user-message {
-            background-color: #3498db;
-            color: white;
+            background-color: #dcf8c6;
             margin-left: auto;
             margin-right: 0;
         }
-        .bot-message {
-            background-color: #e8f4f8;
-            color: #333;
+        .assistant-message {
+            background-color: #f1f0f0;
             margin-right: auto;
             margin-left: 0;
         }
@@ -59,161 +41,189 @@
             margin-top: 10px;
         }
         #user-input {
-            flex: 1;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 5px 0 0 5px;
-            font-size: 16px;
+            flex-grow: 1;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
         }
-        #send-button {
-            background-color: #3498db;
+        button {
+            padding: 8px 16px;
+            margin-left: 10px;
+            background-color: #4CAF50;
             color: white;
             border: none;
-            padding: 10px 15px;
-            border-radius: 0 5px 5px 0;
+            border-radius: 5px;
             cursor: pointer;
-            font-size: 16px;
         }
-        #send-button:hover {
-            background-color: #2980b9;
+        button:hover {
+            background-color: #45a049;
+        }
+        .reset-button {
+            background-color: #f44336;
+        }
+        .reset-button:hover {
+            background-color: #d32f2f;
+        }
+        .loading {
+            display: none;
+            margin-top: 10px;
+            color: #666;
+        }
+        .error {
+            color: red;
+            margin-top: 10px;
         }
         .nav-links {
             margin-bottom: 20px;
         }
         .nav-links a {
-            color: #3498db;
-            text-decoration: none;
             margin-right: 15px;
+            color: #0066cc;
+            text-decoration: none;
         }
         .nav-links a:hover {
             text-decoration: underline;
         }
-        .thinking {
-            font-style: italic;
-            color: #7f8c8d;
-        }
-        .error {
-            color: #e74c3c;
-            font-weight: bold;
-        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="nav-links">
-            <a href="/">Dashboard</a>
-            <a href="/chat">Gemini Chat</a>
-        </div>
-        
-        <h1>Gemini Chat</h1>
-        
-        <div class="chat-container" id="chat-container">
-            <div class="message bot-message">
-                Hello! I'm Gemini, an AI assistant. How can I help you today?
-            </div>
-            <!-- Chat messages will be added here dynamically -->
-        </div>
-        
-        <form id="chat-form" action="/chat" method="post">
-            <div class="input-container">
-                <input type="text" id="user-input" name="user_input" placeholder="Type your message here..." required>
-                <button type="submit" id="send-button">Send</button>
-            </div>
-        </form>
+    <div class="nav-links">
+        <a href="/">Dashboard</a>
+        <a href="/chat">Chat</a>
     </div>
-
+    
+    <h1>Chat with Gemini</h1>
+    
+    <div class="chat-container" id="chat-container">
+        {% if history %}
+            {% for message in history %}
+                <div class="message {% if message.role == 'user' %}user-message{% else %}assistant-message{% endif %}">
+                    <strong>{{ message.role|title }}:</strong> {{ message.content }}
+                </div>
+            {% endfor %}
+        {% else %}
+            <div class="message assistant-message">
+                <strong>Assistant:</strong> Hello! How can I help you today?
+            </div>
+        {% endif %}
+    </div>
+    
+    <div class="input-container">
+        <input type="text" id="user-input" placeholder="Type your message here..." />
+        <button id="send-button">Send</button>
+        <button id="reset-button" class="reset-button">Reset Chat</button>
+    </div>
+    
+    <div id="loading" class="loading">Thinking...</div>
+    
+    {% if error %}
+        <div class="error">{{ error }}</div>
+    {% endif %}
+    
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const chatContainer = document.getElementById('chat-container');
-            const chatForm = document.getElementById('chat-form');
             const userInput = document.getElementById('user-input');
+            const sendButton = document.getElementById('send-button');
+            const resetButton = document.getElementById('reset-button');
+            const loadingIndicator = document.getElementById('loading');
             
             // Scroll to bottom of chat
-            function scrollToBottom() {
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-            }
+            chatContainer.scrollTop = chatContainer.scrollHeight;
             
-            // Add a message to the chat
-            function addMessage(message, isUser) {
-                const messageDiv = document.createElement('div');
-                messageDiv.className = isUser ? 'message user-message' : 'message bot-message';
-                messageDiv.textContent = message;
-                chatContainer.appendChild(messageDiv);
-                scrollToBottom();
-            }
+            // Send message when Send button is clicked
+            sendButton.addEventListener('click', sendMessage);
             
-            // Show thinking indicator
-            function showThinking() {
-                const thinkingDiv = document.createElement('div');
-                thinkingDiv.className = 'message bot-message thinking';
-                thinkingDiv.textContent = 'Thinking...';
-                thinkingDiv.id = 'thinking-indicator';
-                chatContainer.appendChild(thinkingDiv);
-                scrollToBottom();
-            }
-            
-            // Remove thinking indicator
-            function removeThinking() {
-                const thinkingDiv = document.getElementById('thinking-indicator');
-                if (thinkingDiv) {
-                    chatContainer.removeChild(thinkingDiv);
+            // Send message when Enter key is pressed
+            userInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    sendMessage();
                 }
-            }
+            });
             
-            // Handle form submission
-            chatForm.addEventListener('submit', function(e) {
-                e.preventDefault();
+            // Reset chat when Reset button is clicked
+            resetButton.addEventListener('click', resetChat);
+            
+            function sendMessage() {
+                const message = userInput.value.trim();
+                if (!message) return;
                 
-                const userMessage = userInput.value.trim();
-                if (!userMessage) return;
-                
-                // Add user message to chat
-                addMessage(userMessage, true);
-                
-                // Clear input
+                // Clear input field
                 userInput.value = '';
                 
-                // Show thinking indicator
-                showThinking();
+                // Add user message to chat
+                addMessageToChat('User', message, 'user-message');
+                
+                // Show loading indicator
+                loadingIndicator.style.display = 'block';
                 
                 // Send message to server
                 fetch('/chat', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
+                        'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ user_input: userMessage }),
+                    body: JSON.stringify({ user_input: message })
                 })
                 .then(response => response.json())
                 .then(data => {
-                    // Remove thinking indicator
-                    removeThinking();
+                    // Hide loading indicator
+                    loadingIndicator.style.display = 'none';
                     
-                    // Add bot response to chat
                     if (data.error) {
-                        const errorDiv = document.createElement('div');
-                        errorDiv.className = 'message bot-message error';
-                        errorDiv.textContent = 'Error: ' + data.error;
-                        chatContainer.appendChild(errorDiv);
+                        // Show error
+                        addMessageToChat('Error', data.error, 'error');
                     } else {
-                        addMessage(data.response, false);
+                        // Add assistant response to chat
+                        addMessageToChat('Assistant', data.response, 'assistant-message');
                     }
                 })
                 .catch(error => {
-                    // Remove thinking indicator
-                    removeThinking();
+                    // Hide loading indicator
+                    loadingIndicator.style.display = 'none';
                     
                     // Show error
-                    const errorDiv = document.createElement('div');
-                    errorDiv.className = 'message bot-message error';
-                    errorDiv.textContent = 'Error: Could not connect to the server.';
-                    chatContainer.appendChild(errorDiv);
+                    addMessageToChat('Error', 'Failed to send message. Please try again.', 'error');
                     console.error('Error:', error);
                 });
-            });
+            }
             
-            // Initial scroll to bottom
-            scrollToBottom();
+            function resetChat() {
+                // Confirm reset
+                if (!confirm('Are you sure you want to reset the chat? This will clear the conversation history.')) {
+                    return;
+                }
+                
+                // Send reset request to server
+                fetch('/reset_chat', {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // Clear chat container
+                        chatContainer.innerHTML = '';
+                        // Add welcome message
+                        addMessageToChat('Assistant', 'Hello! How can I help you today?', 'assistant-message');
+                    } else {
+                        alert('Failed to reset chat. Please try again.');
+                    }
+                })
+                .catch(error => {
+                    alert('Failed to reset chat. Please try again.');
+                    console.error('Error:', error);
+                });
+            }
+            
+            function addMessageToChat(sender, content, className) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${className}`;
+                messageDiv.innerHTML = `<strong>${sender}:</strong> ${content}`;
+                chatContainer.appendChild(messageDiv);
+                
+                // Scroll to bottom of chat
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
         });
     </script>
 </body>
