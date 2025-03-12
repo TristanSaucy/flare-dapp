@@ -21,6 +21,8 @@ from utils.logging_utils import setup_logging, log_message
 from utils.metadata_utils import get_metadata, get_env_var
 from security.key_management import download_encrypted_key, decrypt_key
 from ai.gemini_client import initialize_gemini, get_gemini_response
+from evm.connection import initialize_evm_connection, get_evm_connection
+from evm.routes import register_evm_routes
 
 # Create Flask app
 app = Flask(__name__)
@@ -40,6 +42,7 @@ config = {
 }
 decrypted_key = None
 gemini_model = None
+evm_connection = None
 
 # Set up logging
 logger, cloud_logger, USE_CLOUD_LOGGING = setup_logging()
@@ -61,6 +64,9 @@ def get_uptime():
 @app.route('/')
 def index():
     """Render the main web interface."""
+    # Get EVM connection status
+    evm_status = get_evm_connection().get_connection_status() if evm_connection else {'connected': False}
+    
     return render_template('index.html', 
                           key_retrieved=key_retrieved,
                           uptime=get_uptime(),
@@ -68,6 +74,7 @@ def index():
                           input_bucket=config['input_bucket'],
                           key_object=config['key_object'],
                           project_id=config['project_id'],
+                          evm_connected=evm_status['connected'],
                           logs=list(recent_logs))
 
 @app.route('/chat', methods=['GET', 'POST'])
@@ -76,6 +83,9 @@ def chat():
     # Initialize chat history in session if it doesn't exist
     if 'chat_history' not in session:
         session['chat_history'] = []
+    
+    # Get EVM connection status for the template
+    evm_status = get_evm_connection().get_connection_status() if evm_connection else {'connected': False}
     
     if request.method == 'POST':
         # Handle AJAX request
@@ -98,13 +108,14 @@ def chat():
             
             return jsonify({
                 'response': response,
-                'history': session['chat_history']
+                'history': session['chat_history'],
+                'evm_status': evm_status
             })
         
         # Handle form submission (fallback)
         user_input = request.form.get('user_input', '')
         if not user_input:
-            return render_template('chat.html', error='No input provided', history=session['chat_history'])
+            return render_template('chat.html', error='No input provided', history=session['chat_history'], evm_status=evm_status)
         
         # Add user message to chat history
         session['chat_history'].append({'role': 'user', 'content': user_input})
@@ -116,10 +127,10 @@ def chat():
         session['chat_history'].append({'role': 'assistant', 'content': response})
         session.modified = True  # Ensure session is saved
         
-        return render_template('chat.html', history=session['chat_history'])
+        return render_template('chat.html', history=session['chat_history'], evm_status=evm_status)
     
     # GET request - just show the chat interface with history
-    return render_template('chat.html', history=session.get('chat_history', []))
+    return render_template('chat.html', history=session.get('chat_history', []), evm_status=evm_status)
 
 @app.route('/reset_chat', methods=['POST'])
 def reset_chat():
@@ -153,7 +164,7 @@ def heartbeat_thread():
 
 def main():
     """Main entry point for the application."""
-    global key_retrieved, config, decrypted_key, gemini_model
+    global key_retrieved, config, decrypted_key, gemini_model, evm_connection
     
     try:
         log_message("INFO", "Starting Confidential Space application", recent_logs=recent_logs,
@@ -200,6 +211,26 @@ def main():
         else:
             log_message("WARNING", "Failed to initialize Vertex AI for Gemini. Chat functionality may be limited.", 
                        recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, use_cloud_logging=USE_CLOUD_LOGGING)
+        
+        # Initialize EVM connection
+        log_message("INFO", "Initializing EVM connection", recent_logs=recent_logs,
+                   logger=logger, cloud_logger=cloud_logger, use_cloud_logging=USE_CLOUD_LOGGING)
+        
+        # Get EVM RPC URL from environment variable if available
+        evm_rpc_url = get_env_var("EVM_RPC_URL", required=False, default="https://coston-api.flare.network/ext/bc/C/rpc")
+        evm_network = get_env_var("EVM_NETWORK", default="flare-coston")
+        
+        evm_connection = initialize_evm_connection(evm_rpc_url, evm_network)
+        
+        if evm_connection and evm_connection.connected:
+            log_message("INFO", f"Successfully connected to EVM network: {evm_connection.network_info['name']}", 
+                       recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, use_cloud_logging=USE_CLOUD_LOGGING)
+        else:
+            log_message("WARNING", "Failed to connect to EVM network. Crypto functionality may be limited.", 
+                       recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, use_cloud_logging=USE_CLOUD_LOGGING)
+        
+        # Register EVM routes
+        register_evm_routes(app)
         
         # Start the heartbeat thread
         thread = threading.Thread(target=heartbeat_thread, daemon=True)

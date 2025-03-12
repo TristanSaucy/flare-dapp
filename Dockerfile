@@ -3,7 +3,7 @@ FROM python:3.9-slim
 WORKDIR /app
 
 # Install required packages
-RUN pip install --no-cache-dir google-cloud-storage google-cloud-kms google-cloud-logging requests flask google-cloud-aiplatform google-generativeai
+RUN pip install --no-cache-dir google-cloud-storage google-cloud-kms google-cloud-logging requests flask google-cloud-aiplatform google-generativeai web3
 
 # Copy application files
 COPY . /app

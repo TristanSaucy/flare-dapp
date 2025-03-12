@@ -84,6 +84,66 @@
         .nav-links a:hover {
             text-decoration: underline;
         }
+        /* EVM Box Styles */
+        .evm-box {
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 20px;
+            background-color: #f5f5f5;
+        }
+        .evm-box h3 {
+            margin-top: 0;
+            display: flex;
+            align-items: center;
+        }
+        .connection-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .connected {
+            background-color: #4CAF50;
+            box-shadow: 0 0 5px #4CAF50;
+        }
+        .disconnected {
+            background-color: #f44336;
+        }
+        .evm-details {
+            margin-top: 10px;
+        }
+        .evm-details p {
+            margin: 5px 0;
+        }
+        .evm-actions {
+            margin-top: 15px;
+        }
+        .evm-actions input {
+            padding: 5px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            margin-right: 5px;
+        }
+        .evm-actions button {
+            padding: 5px 10px;
+            font-size: 0.9em;
+        }
+        .wallet-input {
+            display: flex;
+            margin-top: 10px;
+        }
+        .wallet-input input {
+            flex-grow: 1;
+            padding: 5px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+        }
+        .balance-result {
+            margin-top: 10px;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -93,6 +153,51 @@
     </div>
     
     <h1>Chat with Gemini</h1>
+    
+    <!-- EVM Information Box -->
+    <div class="evm-box" id="evm-box">
+        <h3>
+            <span class="connection-indicator {% if evm_status.connected %}connected{% else %}disconnected{% endif %}" id="connection-indicator"></span>
+            EVM Connection
+        </h3>
+        
+        <div class="evm-details" id="evm-details">
+            {% if evm_status.connected %}
+                <p><strong>Network:</strong> <span id="network-name">{{ evm_status.network.name }}</span></p>
+                <p><strong>Chain ID:</strong> <span id="chain-id">{{ evm_status.network.chain_id }}</span></p>
+                <p><strong>Latest Block:</strong> <span id="latest-block">{{ evm_status.network.latest_block }}</span></p>
+                <p><strong>Gas Price:</strong> <span id="gas-price">{{ evm_status.network.gas_price | default('N/A') }}</span> Wei</p>
+            {% else %}
+                <p>Not connected to any EVM network</p>
+            {% endif %}
+        </div>
+        
+        <div class="evm-actions">
+            <div>
+                <select id="network-select">
+                    <option value="flare-coston" selected>Flare Coston</option>
+                    <option value="songbird">Songbird</option>
+                    <option value="flare">Flare</option>
+                    <option value="ethereum">Ethereum</option>
+                    <option value="goerli">Goerli</option>
+                    <option value="sepolia">Sepolia</option>
+                    <option value="polygon">Polygon</option>
+                    <option value="arbitrum">Arbitrum</option>
+                    <option value="optimism">Optimism</option>
+                    <option value="base">Base</option>
+                </select>
+                <input type="text" id="rpc-url" placeholder="Custom RPC URL (optional)">
+                <button id="connect-button">Connect</button>
+            </div>
+            
+            <div class="wallet-input">
+                <input type="text" id="wallet-address" placeholder="Enter wallet address">
+                <button id="check-balance-button">Check Balance</button>
+            </div>
+            
+            <div class="balance-result" id="balance-result"></div>
+        </div>
+    </div>
     
     <div class="chat-container" id="chat-container">
         {% if history %}
@@ -128,6 +233,16 @@
             const resetButton = document.getElementById('reset-button');
             const loadingIndicator = document.getElementById('loading');
             
+            // EVM elements
+            const connectionIndicator = document.getElementById('connection-indicator');
+            const evmDetails = document.getElementById('evm-details');
+            const networkSelect = document.getElementById('network-select');
+            const rpcUrlInput = document.getElementById('rpc-url');
+            const connectButton = document.getElementById('connect-button');
+            const walletAddressInput = document.getElementById('wallet-address');
+            const checkBalanceButton = document.getElementById('check-balance-button');
+            const balanceResult = document.getElementById('balance-result');
+            
             // Scroll to bottom of chat
             chatContainer.scrollTop = chatContainer.scrollHeight;
             
@@ -143,6 +258,15 @@
             
             // Reset chat when Reset button is clicked
             resetButton.addEventListener('click', resetChat);
+            
+            // Connect to EVM network
+            connectButton.addEventListener('click', connectToEVM);
+            
+            // Check wallet balance
+            checkBalanceButton.addEventListener('click', checkWalletBalance);
+            
+            // Update EVM status periodically
+            setInterval(updateEVMStatus, 10000); // Update every 10 seconds
             
             function sendMessage() {
                 const message = userInput.value.trim();
@@ -176,6 +300,11 @@
                     } else {
                         // Add assistant response to chat
                         addMessageToChat('Assistant', data.response, 'assistant-message');
+                        
+                        // Update EVM status if provided
+                        if (data.evm_status) {
+                            updateEVMStatusDisplay(data.evm_status);
+                        }
                     }
                 })
                 .catch(error => {
@@ -223,6 +352,97 @@
                 
                 // Scroll to bottom of chat
                 chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+            
+            function connectToEVM() {
+                const networkName = networkSelect.value;
+                const rpcUrl = rpcUrlInput.value.trim();
+                
+                // Show connecting status
+                connectionIndicator.className = 'connection-indicator disconnected';
+                evmDetails.innerHTML = '<p>Connecting...</p>';
+                
+                // Send connection request to server
+                fetch('/api/evm/connect', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        network_name: networkName,
+                        rpc_url: rpcUrl || null
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // Update status display
+                        updateEVMStatusDisplay(data.status);
+                    } else {
+                        evmDetails.innerHTML = '<p>Failed to connect to EVM network</p>';
+                        connectionIndicator.className = 'connection-indicator disconnected';
+                    }
+                })
+                .catch(error => {
+                    evmDetails.innerHTML = '<p>Error connecting to EVM network</p>';
+                    connectionIndicator.className = 'connection-indicator disconnected';
+                    console.error('Error:', error);
+                });
+            }
+            
+            function checkWalletBalance() {
+                const walletAddress = walletAddressInput.value.trim();
+                
+                if (!walletAddress) {
+                    balanceResult.textContent = 'Please enter a wallet address';
+                    return;
+                }
+                
+                balanceResult.textContent = 'Checking balance...';
+                
+                // Send balance request to server
+                fetch(`/api/evm/balance?address=${walletAddress}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        balanceResult.textContent = data.error;
+                    } else {
+                        balanceResult.textContent = `Balance: ${data.balance} ${data.symbol}`;
+                    }
+                })
+                .catch(error => {
+                    balanceResult.textContent = 'Error checking balance';
+                    console.error('Error:', error);
+                });
+            }
+            
+            function updateEVMStatus() {
+                fetch('/api/evm/status')
+                .then(response => response.json())
+                .then(data => {
+                    updateEVMStatusDisplay(data);
+                })
+                .catch(error => {
+                    console.error('Error updating EVM status:', error);
+                });
+            }
+            
+            function updateEVMStatusDisplay(status) {
+                // Update connection indicator
+                connectionIndicator.className = `connection-indicator ${status.connected ? 'connected' : 'disconnected'}`;
+                
+                // Update details
+                if (status.connected) {
+                    const network = status.network;
+                    evmDetails.innerHTML = `
+                        <p><strong>Network:</strong> <span id="network-name">${network.name}</span></p>
+                        <p><strong>Chain ID:</strong> <span id="chain-id">${network.chain_id}</span></p>
+                        <p><strong>Latest Block:</strong> <span id="latest-block">${network.latest_block}</span></p>
+                        <p><strong>Gas Price:</strong> <span id="gas-price">${network.gas_price}</span> Wei</p>
+                    `;
+                } else {
+                    evmDetails.innerHTML = '<p>Not connected to any EVM network</p>';
+                }
             }
         });
     </script>
