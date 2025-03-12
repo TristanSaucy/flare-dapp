@@ -15,6 +15,7 @@ from collections import deque
 import google.cloud.logging
 from flask import Flask, render_template, request, jsonify, session
 from vertexai.generative_models import GenerationConfig
+from google.cloud import storage
 
 # Import from our modules
 from utils.logging_utils import setup_logging, log_message
@@ -151,16 +152,126 @@ def reset_chat():
     
     return jsonify({'success': True, 'message': 'Chat history has been reset'})
 
-def heartbeat_thread():
-    """Background thread that logs a heartbeat message periodically."""
-    global heartbeat_count
+@app.route('/api/key/list', methods=['GET'])
+def list_keys():
+    """List available encrypted keys in the bucket."""
+    try:
+        input_bucket = get_env_var("INPUT_BUCKET_NAME", required=True)
+        
+        # Create storage client
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(input_bucket)
+        
+        # List objects with .enc extension
+        blobs = list(bucket.list_blobs())
+        key_files = [blob.name for blob in blobs if blob.name.endswith('.enc')]
+        
+        return jsonify({
+            'success': True,
+            'keys': key_files
+        })
+        
+    except Exception as e:
+        log_message("ERROR", f"Failed to list keys: {str(e)}", 
+                   recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                   use_cloud_logging=USE_CLOUD_LOGGING)
+        return jsonify({'success': False, 'error': f'Failed to list keys: {str(e)}'}), 500
+
+@app.route('/api/key/load', methods=['POST'])
+def load_key():
+    """Load a specific encrypted key from the bucket and decrypt it."""
+    if not request.is_json:
+        return jsonify({'error': 'Request must be JSON'}), 400
     
-    while True:
-        heartbeat_count += 1
-        message = f"Heartbeat #{heartbeat_count} - Application is running"
-        log_message("INFO", message, counter=heartbeat_count, recent_logs=recent_logs, 
-                   logger=logger, cloud_logger=cloud_logger, use_cloud_logging=USE_CLOUD_LOGGING)
-        time.sleep(5)
+    data = request.get_json()
+    key_object_name = data.get('key_name')
+    
+    if not key_object_name:
+        return jsonify({'error': 'Key name is required'}), 400
+    
+    try:
+        # Get the KMS key name and bucket from config
+        kms_key_name = get_env_var("KMS_KEY_NAME", required=True)
+        input_bucket = get_env_var("INPUT_BUCKET_NAME", required=True)
+        
+        log_message("INFO", f"Attempting to load key: {key_object_name} from bucket: {input_bucket}", 
+                   recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                   use_cloud_logging=USE_CLOUD_LOGGING)
+        
+        # Download and decrypt the key
+        encrypted_key = download_encrypted_key(input_bucket, key_object_name)
+        log_message("INFO", f"Downloaded encrypted key, size: {len(encrypted_key)} bytes", 
+                   recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                   use_cloud_logging=USE_CLOUD_LOGGING)
+        
+        decrypted_key_bytes = decrypt_key(encrypted_key, kms_key_name)
+        log_message("INFO", f"Decrypted key, size: {len(decrypted_key_bytes)} bytes", 
+                   recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                   use_cloud_logging=USE_CLOUD_LOGGING)
+        
+        # Update global decrypted key for EVM connection
+        global decrypted_key
+        decrypted_key = decrypted_key_bytes
+        
+        # Derive the address from the private key
+        address = None
+        try:
+            from eth_account import Account
+            
+            # Convert bytes to string
+            private_key_str = decrypted_key_bytes.decode('utf-8').strip()
+            log_message("INFO", f"Decoded private key string, length: {len(private_key_str)}", 
+                       recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                       use_cloud_logging=USE_CLOUD_LOGGING)
+            
+            # Ensure the private key has the 0x prefix
+            if not private_key_str.startswith('0x'):
+                private_key_str = '0x' + private_key_str
+                log_message("INFO", "Added 0x prefix to private key", 
+                           recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                           use_cloud_logging=USE_CLOUD_LOGGING)
+            
+            # Log key format (without revealing the actual key)
+            log_message("INFO", f"Private key format check - starts with 0x: {private_key_str.startswith('0x')}, length: {len(private_key_str)}", 
+                       recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                       use_cloud_logging=USE_CLOUD_LOGGING)
+            
+            # Derive the address from the private key
+            account = Account.from_key(private_key_str)
+            address = account.address
+            
+            log_message("INFO", f"Successfully derived address from loaded key: {address}", 
+                       recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                       use_cloud_logging=USE_CLOUD_LOGGING)
+            
+            # Clear the account object to avoid keeping the key in memory
+            del account
+        except Exception as e:
+            log_message("WARNING", f"Key loaded but address derivation failed: {str(e)}", 
+                       recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                       use_cloud_logging=USE_CLOUD_LOGGING)
+            # We'll continue even if address derivation fails, as the key is still loaded
+        
+        log_message("INFO", f"User loaded and decrypted key: {key_object_name}", 
+                   recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                   use_cloud_logging=USE_CLOUD_LOGGING)
+        
+        # Return the address along with the success message
+        response = {
+            'success': True,
+            'message': 'Private key loaded successfully'
+        }
+        
+        if address:
+            response['address'] = address
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        log_message("ERROR", f"Failed to load and decrypt key: {str(e)}", 
+                   recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                   use_cloud_logging=USE_CLOUD_LOGGING)
+        return jsonify({'success': False, 'error': f'Failed to load key: {str(e)}'}), 500
 
 def main():
     """Main entry point for the application."""
@@ -232,9 +343,6 @@ def main():
         # Register EVM routes
         register_evm_routes(app)
         
-        # Start the heartbeat thread
-        thread = threading.Thread(target=heartbeat_thread, daemon=True)
-        thread.start()
         
         # Try to download and decrypt the key
         try:
@@ -250,6 +358,43 @@ def main():
             key_preview = decrypted_key[:10].decode('utf-8') + "..." if len(decrypted_key) > 10 else decrypted_key.decode('utf-8')
             log_message("INFO", f"Key preview: {key_preview}", recent_logs=recent_logs,
                        logger=logger, cloud_logger=cloud_logger, use_cloud_logging=USE_CLOUD_LOGGING)
+            
+            # Verify that the key is valid by deriving the address
+            try:
+                from eth_account import Account
+                
+                # Convert bytes to string
+                private_key_str = decrypted_key.decode('utf-8').strip()
+                log_message("INFO", f"Decoded private key string, length: {len(private_key_str)}", 
+                           recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                           use_cloud_logging=USE_CLOUD_LOGGING)
+                
+                # Ensure the private key has the 0x prefix
+                if not private_key_str.startswith('0x'):
+                    private_key_str = '0x' + private_key_str
+                    log_message("INFO", "Added 0x prefix to private key", 
+                               recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                               use_cloud_logging=USE_CLOUD_LOGGING)
+                
+                # Log key format (without revealing the actual key)
+                log_message("INFO", f"Private key format check - starts with 0x: {private_key_str.startswith('0x')}, length: {len(private_key_str)}", 
+                           recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                           use_cloud_logging=USE_CLOUD_LOGGING)
+                
+                # Derive the address from the private key
+                account = Account.from_key(private_key_str)
+                address = account.address
+                
+                log_message("INFO", f"Successfully derived address from startup key: {address}", 
+                           recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                           use_cloud_logging=USE_CLOUD_LOGGING)
+                
+                # Clear the account object to avoid keeping the key in memory
+                del account
+            except Exception as e:
+                log_message("WARNING", f"Startup key loaded but address derivation failed: {str(e)}", 
+                           recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                           use_cloud_logging=USE_CLOUD_LOGGING)
             
             key_retrieved = True
         except Exception as e:

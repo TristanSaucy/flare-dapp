@@ -11,13 +11,6 @@ from web3 import Web3
 
 # Default RPC endpoints for different networks
 DEFAULT_NETWORKS = {
-    'ethereum': 'https://eth-mainnet.g.alchemy.com/v2/demo',
-    'goerli': 'https://eth-goerli.g.alchemy.com/v2/demo',
-    'sepolia': 'https://eth-sepolia.g.alchemy.com/v2/demo',
-    'polygon': 'https://polygon-mainnet.g.alchemy.com/v2/demo',
-    'arbitrum': 'https://arb-mainnet.g.alchemy.com/v2/demo',
-    'optimism': 'https://opt-mainnet.g.alchemy.com/v2/demo',
-    'base': 'https://base-mainnet.g.alchemy.com/v2/demo',
     'flare-coston': 'https://coston-api.flare.network/ext/bc/C/rpc',
     'songbird': 'https://songbird-api.flare.network/ext/C/rpc',
     'flare': 'https://flare-api.flare.network/ext/C/rpc',
@@ -80,13 +73,6 @@ class EVMConnection:
                     # Try to determine network name from chain ID if not already set
                     if self.network_info['name'] == 'Unknown':
                         chain_id_to_name = {
-                            1: 'Ethereum',
-                            5: 'Goerli',
-                            11155111: 'Sepolia',
-                            137: 'Polygon',
-                            42161: 'Arbitrum',
-                            10: 'Optimism',
-                            8453: 'Base',
                             16: 'Flare Coston',  # Flare Coston chain ID
                             19: 'Songbird',      # Songbird chain ID
                             14: 'Flare',         # Flare chain ID

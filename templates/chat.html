@@ -178,16 +178,29 @@
                     <option value="flare-coston" selected>Flare Coston</option>
                     <option value="songbird">Songbird</option>
                     <option value="flare">Flare</option>
-                    <option value="ethereum">Ethereum</option>
-                    <option value="goerli">Goerli</option>
-                    <option value="sepolia">Sepolia</option>
-                    <option value="polygon">Polygon</option>
-                    <option value="arbitrum">Arbitrum</option>
-                    <option value="optimism">Optimism</option>
-                    <option value="base">Base</option>
                 </select>
                 <input type="text" id="rpc-url" placeholder="Custom RPC URL (optional)">
                 <button id="connect-button">Connect</button>
+            </div>
+            
+            <!-- Private Key Management Section -->
+            <div style="margin-top: 15px; border-top: 1px solid #ddd; padding-top: 10px;">
+                <h4 style="margin-top: 0;">Private Key Management</h4>
+                
+                <div style="display: flex; margin-bottom: 10px;">
+                    <select id="key-select" style="flex-grow: 1; margin-right: 5px;">
+                        <option value="">Select a stored key...</option>
+                    </select>
+                    <button id="load-key-button">Load Key</button>
+                    <button id="refresh-keys-button" style="margin-left: 5px;">↻</button>
+                </div>
+                
+                <div id="current-key-info" style="background-color: #f0f0f0; padding: 10px; border-radius: 5px; margin-top: 10px; display: none;">
+                    <p><strong>Current Key:</strong> <span id="current-key-name">None</span></p>
+                    <p><strong>Address:</strong> <span id="current-key-address">Loading...</span></p>
+                </div>
+                
+                <div id="key-message" style="margin-top: 10px; font-weight: bold;"></div>
             </div>
             
             <div class="wallet-input">
@@ -243,6 +256,15 @@
             const checkBalanceButton = document.getElementById('check-balance-button');
             const balanceResult = document.getElementById('balance-result');
             
+            // Private Key Management elements
+            const keySelect = document.getElementById('key-select');
+            const loadKeyButton = document.getElementById('load-key-button');
+            const refreshKeysButton = document.getElementById('refresh-keys-button');
+            const currentKeyInfo = document.getElementById('current-key-info');
+            const currentKeyName = document.getElementById('current-key-name');
+            const currentKeyAddress = document.getElementById('current-key-address');
+            const keyMessage = document.getElementById('key-message');
+            
             // Scroll to bottom of chat
             chatContainer.scrollTop = chatContainer.scrollHeight;
             
@@ -264,6 +286,16 @@
             
             // Check wallet balance
             checkBalanceButton.addEventListener('click', checkWalletBalance);
+            
+            // Private Key Management event listeners
+            refreshKeysButton.addEventListener('click', loadAvailableKeys);
+            loadKeyButton.addEventListener('click', loadSelectedKey);
+            
+            // Load available keys on page load
+            loadAvailableKeys();
+            
+            // Check if a key is already loaded
+            checkLoadedKey();
             
             // Update EVM status periodically
             setInterval(updateEVMStatus, 10000); // Update every 10 seconds
@@ -395,25 +427,49 @@
                 
                 if (!walletAddress) {
                     balanceResult.textContent = 'Please enter a wallet address';
+                    balanceResult.style.color = '#f44336';
                     return;
                 }
                 
                 balanceResult.textContent = 'Checking balance...';
+                balanceResult.style.color = '#888';
                 
                 // Send balance request to server
-                fetch(`/api/evm/balance?address=${walletAddress}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) {
-                        balanceResult.textContent = data.error;
-                    } else {
-                        balanceResult.textContent = `Balance: ${data.balance} ${data.symbol}`;
-                    }
-                })
-                .catch(error => {
-                    balanceResult.textContent = 'Error checking balance';
-                    console.error('Error:', error);
-                });
+                fetch(`/api/evm/balance?address=${encodeURIComponent(walletAddress)}`)
+                    .then(response => {
+                        if (!response.ok) {
+                            return response.json().then(errorData => {
+                                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                            });
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log("Balance response:", data); // Debug log
+                        
+                        if (data.error) {
+                            balanceResult.textContent = data.error;
+                            balanceResult.style.color = '#f44336';
+                        } else {
+                            // Format the balance to a reasonable number of decimal places
+                            const formattedBalance = parseFloat(data.balance).toFixed(6);
+                            
+                            // Create a more detailed balance display
+                            balanceResult.innerHTML = `
+                                <div style="background-color: #f0f8ff; padding: 10px; border-radius: 5px; border-left: 4px solid #4CAF50;">
+                                    <p style="margin: 0 0 5px 0;"><strong>Address:</strong> ${data.address}</p>
+                                    <p style="margin: 0 0 5px 0;"><strong>Balance:</strong> ${formattedBalance} ${data.symbol}</p>
+                                    <p style="margin: 0; font-size: 0.8em; color: #666;">Network: ${document.getElementById('network-name').textContent || 'Unknown'}</p>
+                                </div>
+                            `;
+                            balanceResult.style.color = 'inherit';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error checking balance:', error);
+                        balanceResult.textContent = 'Error checking balance: ' + error.message;
+                        balanceResult.style.color = '#f44336';
+                    });
             }
             
             function updateEVMStatus() {
@@ -443,6 +499,213 @@
                 } else {
                     evmDetails.innerHTML = '<p>Not connected to any EVM network</p>';
                 }
+            }
+            
+            // Function to load available keys from the server
+            function loadAvailableKeys() {
+                keyMessage.textContent = 'Loading available keys...';
+                keyMessage.style.color = '#888';
+                
+                fetch('/api/key/list')
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log("Keys response:", data); // Debug log
+                        
+                        if (data.success) {
+                            // Clear existing options except the first one
+                            while (keySelect.options.length > 1) {
+                                keySelect.remove(1);
+                            }
+                            
+                            // Add new options
+                            data.keys.forEach(key => {
+                                const option = document.createElement('option');
+                                option.value = key;
+                                option.textContent = key;
+                                keySelect.appendChild(option);
+                            });
+                            
+                            // Show message if no keys found
+                            if (data.keys.length === 0) {
+                                keyMessage.textContent = 'No encrypted keys found in the bucket.';
+                                keyMessage.style.color = '#888';
+                            } else {
+                                keyMessage.textContent = `${data.keys.length} key(s) found.`;
+                                keyMessage.style.color = '#4CAF50';
+                            }
+                        } else {
+                            keyMessage.textContent = data.error || 'Failed to load keys.';
+                            keyMessage.style.color = '#f44336';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error loading keys:', error);
+                        keyMessage.textContent = 'Error loading keys: ' + error.message;
+                        keyMessage.style.color = '#f44336';
+                    });
+            }
+            
+            // Function to load the selected key
+            function loadSelectedKey() {
+                const selectedKey = keySelect.value;
+                
+                if (!selectedKey) {
+                    keyMessage.textContent = 'Please select a key to load.';
+                    keyMessage.style.color = '#f44336';
+                    return;
+                }
+                
+                keyMessage.textContent = 'Loading key...';
+                keyMessage.style.color = '#888';
+                
+                // Show the current key info with loading state
+                currentKeyInfo.style.display = 'block';
+                currentKeyName.textContent = selectedKey;
+                currentKeyAddress.textContent = 'Loading...';
+                
+                // Load the key and get the address in one call
+                fetch('/api/key/load', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ key_name: selectedKey })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log("Key load response:", data); // Debug log
+                    
+                    if (data.success) {
+                        if (data.address) {
+                            // We got the address directly from the key loading endpoint
+                            currentKeyAddress.textContent = data.address;
+                            walletAddressInput.value = data.address;
+                            
+                            keyMessage.textContent = 'Key loaded successfully!';
+                            keyMessage.style.color = '#4CAF50';
+                            
+                            // Automatically check the balance
+                            setTimeout(() => {
+                                checkWalletBalance();
+                            }, 500);
+                        } else {
+                            // Key loaded but no address was returned, try the separate endpoint
+                            keyMessage.textContent = 'Key loaded successfully! Deriving address...';
+                            keyMessage.style.color = '#4CAF50';
+                            
+                            // Try to get the address with a separate call
+                            setTimeout(() => {
+                                getKeyAddress();
+                            }, 1000);
+                        }
+                    } else {
+                        currentKeyAddress.textContent = 'Error: Key loading failed';
+                        keyMessage.textContent = data.error || 'Failed to load key.';
+                        keyMessage.style.color = '#f44336';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading key:', error);
+                    currentKeyAddress.textContent = 'Error: Key loading failed';
+                    keyMessage.textContent = 'Error loading key: ' + error.message;
+                    keyMessage.style.color = '#f44336';
+                });
+            }
+            
+            // Separate function to get the address from the loaded key
+            function getKeyAddress() {
+                fetch('/api/key/address')
+                    .then(response => {
+                        if (!response.ok) {
+                            return response.json().then(errorData => {
+                                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                            });
+                        }
+                        return response.json();
+                    })
+                    .then(addressData => {
+                        console.log("Address response:", addressData); // Debug log
+                        
+                        if (addressData.success && addressData.address) {
+                            // Set the wallet address input and display
+                            currentKeyAddress.textContent = addressData.address;
+                            walletAddressInput.value = addressData.address;
+                            
+                            keyMessage.textContent = 'Key loaded successfully!';
+                            keyMessage.style.color = '#4CAF50';
+                            
+                            // Automatically check the balance
+                            setTimeout(() => {
+                                checkWalletBalance();
+                            }, 500);
+                        } else {
+                            currentKeyAddress.textContent = 'Error: ' + (addressData.error || 'Could not derive address');
+                            keyMessage.textContent = 'Failed to derive address from key: ' + (addressData.error || 'Unknown error');
+                            keyMessage.style.color = '#f44336';
+                            console.error('Address derivation error:', addressData);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error getting address:', error);
+                        currentKeyAddress.textContent = 'Error deriving address';
+                        keyMessage.textContent = 'Error deriving address from key: ' + error.message;
+                        keyMessage.style.color = '#f44336';
+                    });
+            }
+            
+            // Function to check if a key is already loaded
+            function checkLoadedKey() {
+                fetch('/api/key/address')
+                    .then(response => {
+                        if (!response.ok) {
+                            // If we get a 400 error, it means no key is loaded - this is normal
+                            if (response.status === 400) {
+                                console.log("No key currently loaded");
+                                
+                                // If there's a key in the dropdown, suggest loading it
+                                if (keySelect.options.length > 1) {
+                                    keyMessage.textContent = 'Please select and load a key to view its balance.';
+                                    keyMessage.style.color = '#888';
+                                }
+                                return { success: false, error: 'No key loaded' };
+                            }
+                            return response.json().then(errorData => {
+                                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                            });
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        if (data.success && data.address) {
+                            // A key is already loaded
+                            currentKeyInfo.style.display = 'block';
+                            currentKeyName.textContent = 'Previously loaded key';
+                            currentKeyAddress.textContent = data.address;
+                            walletAddressInput.value = data.address;
+                            
+                            keyMessage.textContent = 'A key is already loaded.';
+                            keyMessage.style.color = '#4CAF50';
+                            
+                            // Automatically check the balance
+                            setTimeout(() => {
+                                checkWalletBalance();
+                            }, 500);
+                        }
+                    })
+                    .catch(error => {
+                        console.log('Error checking loaded key:', error);
+                        // This is not necessarily an error, so we don't need to show a message
+                    });
             }
         });
     </script>

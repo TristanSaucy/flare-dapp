@@ -3,8 +3,9 @@ EVM Routes Module
 This module provides Flask routes for EVM-related functionality.
 """
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 from evm.connection import get_evm_connection, initialize_evm_connection
+import sys
 
 # Create a Blueprint for EVM routes
 evm_bp = Blueprint('evm', __name__)
@@ -60,13 +61,95 @@ def get_balance():
         # Get native token (ETH) balance
         balance = evm_conn.get_eth_balance(address)
         if balance is not None:
+            # Get the network symbol
+            network_name = evm_conn.network_info['name'].lower()
+            symbol = 'FLR' if network_name == 'flare' else 'SGB' if network_name == 'songbird' else 'CFLR' if network_name == 'flare coston' else 'ETH'
+            
             return jsonify({
                 'address': address,
                 'balance': balance,
-                'symbol': 'ETH'  # This could be different based on the network
+                'symbol': symbol
             })
         else:
             return jsonify({'error': 'Failed to get ETH balance'}), 400
+
+@evm_bp.route('/api/key/address', methods=['GET'])
+def get_key_address():
+    """Get the Ethereum address derived from the currently loaded private key"""
+    try:
+        # Access the global decrypted_key
+        # Import here to avoid circular imports
+        from main import decrypted_key, log_message, recent_logs, logger, cloud_logger, USE_CLOUD_LOGGING
+        
+        log_message("INFO", "Attempting to derive address from key", 
+                   recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                   use_cloud_logging=USE_CLOUD_LOGGING)
+        
+        # Debug the decrypted_key
+        if decrypted_key is None:
+            log_message("ERROR", "decrypted_key is None", 
+                       recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                       use_cloud_logging=USE_CLOUD_LOGGING)
+            return jsonify({'error': 'No private key is currently loaded'}), 400
+        
+        log_message("INFO", f"decrypted_key type: {type(decrypted_key)}, length: {len(decrypted_key) if decrypted_key else 0}", 
+                   recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                   use_cloud_logging=USE_CLOUD_LOGGING)
+        
+        # Import web3 here to avoid circular imports
+        from web3 import Web3
+        from eth_account import Account
+        
+        # Convert bytes to string if needed
+        if isinstance(decrypted_key, bytes):
+            private_key = decrypted_key.decode('utf-8').strip()
+            log_message("INFO", f"Decoded private key from bytes, length: {len(private_key)}", 
+                       recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                       use_cloud_logging=USE_CLOUD_LOGGING)
+        else:
+            private_key = decrypted_key
+            log_message("INFO", f"Using private key as is, type: {type(private_key)}", 
+                       recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                       use_cloud_logging=USE_CLOUD_LOGGING)
+        
+        # Ensure the private key has the 0x prefix
+        if not private_key.startswith('0x'):
+            private_key = '0x' + private_key
+            log_message("INFO", "Added 0x prefix to private key", 
+                       recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                       use_cloud_logging=USE_CLOUD_LOGGING)
+        
+        # Log the key length (don't log the actual key)
+        log_message("INFO", f"Final private key length: {len(private_key)}", 
+                   recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                   use_cloud_logging=USE_CLOUD_LOGGING)
+        
+        # Derive the address from the private key
+        try:
+            account = Account.from_key(private_key)
+            address = account.address
+            
+            log_message("INFO", f"Successfully derived address: {address}", 
+                       recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                       use_cloud_logging=USE_CLOUD_LOGGING)
+            
+            # Clear the account object to avoid keeping the key in memory
+            del account
+            
+            return jsonify({
+                'success': True,
+                'address': address
+            })
+        except Exception as inner_e:
+            log_message("ERROR", f"Failed to create account from key: {str(inner_e)}", 
+                       recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                       use_cloud_logging=USE_CLOUD_LOGGING)
+            raise inner_e
+        
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to derive address from key: {str(e)}")
+        return jsonify({'error': f'Failed to derive address: {str(e)}'}), 500
 
 def register_evm_routes(app):
     """Register EVM routes with the Flask app"""
