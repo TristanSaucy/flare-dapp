@@ -1,9 +1,67 @@
 """
 Gemini AI client for the Confidential Space application.
 """
+import os
 from google.cloud import aiplatform
-from vertexai.generative_models import GenerativeModel, GenerationConfig
+from vertexai.preview.generative_models import (
+    GenerativeModel, 
+    GenerationConfig,
+    Content,
+    Part,
+    FunctionDeclaration,
+    Tool,
+    AutomaticFunctionCallingResponder
+)
 from utils.metadata_utils import get_metadata, get_env_var
+
+# Sample Ethereum functions that will be exposed to the model
+def get_eth_balance(address: str):
+    """
+    Get the Ethereum balance for a given address.
+    
+    Args:
+        address: The Ethereum address to check
+        
+    Returns:
+        A dictionary containing the address and its balance
+    """
+    # This is a mock implementation - in production, you would use web3.py to get the actual balance
+    # In your real implementation, you could use:
+    # from web3 import Web3
+    # from evm.connection import get_evm_connection
+    # web3 = get_evm_connection().web3
+    # balance = web3.eth.get_balance(address)
+    # return {"address": address, "balance": web3.from_wei(balance, 'ether'), "unit": "ETH"}
+    
+    # Mock implementation for demonstration
+    return {
+        "address": address,
+        "balance": "10.5",
+        "unit": "ETH"
+    }
+
+def estimate_gas_fee(from_address: str, to_address: str, value: str = "0"):
+    """
+    Estimate the gas fee for a transaction.
+    
+    Args:
+        from_address: The sender's Ethereum address
+        to_address: The recipient's Ethereum address
+        value: The amount of ETH to send (in ether)
+        
+    Returns:
+        A dictionary containing the estimated gas fee
+    """
+    # Mock implementation for demonstration
+    return {
+        "from": from_address,
+        "to": to_address,
+        "value": value,
+        "estimated_gas": "0.002",
+        "unit": "ETH",
+        "gas_price": "50",
+        "unit_price": "gwei"
+    }
 
 def initialize_gemini():
     """Initialize the Vertex AI client for Gemini."""
@@ -36,8 +94,21 @@ def initialize_gemini():
         # Initialize Vertex AI
         aiplatform.init(project=project_id, location=location)
         
-        # Create the model instance
-        model = GenerativeModel("gemini-2.0-pro-exp-02-05")  # Use the experimental Gemini 2.0 Pro model
+        # Create function declarations from our Ethereum functions
+        eth_balance_func = FunctionDeclaration.from_func(get_eth_balance)
+        gas_estimate_func = FunctionDeclaration.from_func(estimate_gas_fee)
+        
+        # Create a tool that groups related functions
+        ethereum_tool = Tool(
+            function_declarations=[eth_balance_func, gas_estimate_func],
+        )
+        
+        # Create the model instance with tools
+        model = GenerativeModel(
+            "gemini-2.0-pro-exp-02-05",  # Use the experimental Gemini 2.0 Pro model
+            tools=[ethereum_tool],
+            system_instruction="You are a helpful assistant that can provide information about the Flare blockchain ecosystem. You can check balances and estimate gas fees."
+        )
         
         # Define generation config (will be used when generating content)
         generation_config = GenerationConfig(
@@ -47,8 +118,13 @@ def initialize_gemini():
             top_k=40
         )
         
-        # Start a chat session
-        chat = model.start_chat()
+        # Set up automatic function calling
+        afc_responder = AutomaticFunctionCallingResponder(
+            max_automatic_function_calls=3,
+        )
+        
+        # Start a chat session with the responder
+        chat = model.start_chat(responder=afc_responder)
         
         # Store the project, location, model, chat session and generation config
         gemini_model = {
@@ -57,6 +133,8 @@ def initialize_gemini():
             "model": model,
             "chat": chat,
             "generation_config": generation_config,
+            "tools": [ethereum_tool],
+            "responder": afc_responder,
             "initialized": True
         }
         
@@ -78,11 +156,24 @@ def get_gemini_response(prompt, gemini_model_config):
         if not chat:
             # If chat session doesn't exist for some reason, create a new one
             model = gemini_model_config.get("model")
+            responder = gemini_model_config.get("responder")
+            
             if not model:
-                model = GenerativeModel("gemini-2.0-pro-exp-02-05")
+                # Recreate the model with tools if needed
+                tools = gemini_model_config.get("tools", [])
+                model = GenerativeModel(
+                    "gemini-2.0-pro-exp-02-05",
+                    tools=tools,
+                    system_instruction="You are a helpful assistant that can provide information about Ethereum blockchain. You can check balances and estimate gas fees."
+                )
                 gemini_model_config["model"] = model
             
-            chat = model.start_chat()
+            # Create a new chat session with the responder for function calling
+            if responder:
+                chat = model.start_chat(responder=responder)
+            else:
+                chat = model.start_chat()
+                
             gemini_model_config["chat"] = chat
         
         # Send the message to the ongoing chat session with generation config
@@ -102,7 +193,13 @@ def get_gemini_response(prompt, gemini_model_config):
         try:
             if gemini_model_config and gemini_model_config.get("model"):
                 model = gemini_model_config.get("model")
-                chat = model.start_chat()
+                responder = gemini_model_config.get("responder")
+                
+                if responder:
+                    chat = model.start_chat(responder=responder)
+                else:
+                    chat = model.start_chat()
+                    
                 gemini_model_config["chat"] = chat
                 return "I had to restart our conversation. How can I help you?"
         except Exception as reset_error:
