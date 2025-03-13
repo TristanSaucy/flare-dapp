@@ -30,19 +30,54 @@ if [ -z "$KEYRING_NAME" ] || [ -z "$KEY_NAME" ] || [ -z "$INPUT_BUCKET_NAME" ] |
     exit 1
 fi
 
-# Prompt user for private key
-echo -n "Enter Ethereum private key: "
-read -s PRIVATE_KEY
-echo ""  # Add a newline after input
+# Ask user how they want to input the private key
+echo "How would you like to input your Ethereum private key?"
+echo "1) Type or paste it directly (visible input)"
+echo "2) Provide a file containing the key"
+echo -n "Enter your choice (1 or 2): "
+read KEY_INPUT_CHOICE
 
-if [ -z "$PRIVATE_KEY" ]; then
-    print_error "No private key entered. Exiting."
+PRIVATE_KEY=""
+
+if [ "$KEY_INPUT_CHOICE" = "1" ]; then
+    # Option 1: Direct input (visible)
+    echo -n "Enter Ethereum private key (input will be visible): "
+    read PRIVATE_KEY
+    
+    if [ -z "$PRIVATE_KEY" ]; then
+        print_error "No private key entered. Exiting."
+        exit 1
+    fi
+    
+    # Create temporary file with private key
+    print_info "Creating temporary file with private key..."
+    echo -n "$PRIVATE_KEY" > private_key.txt
+    
+elif [ "$KEY_INPUT_CHOICE" = "2" ]; then
+    # Option 2: File input
+    echo -n "Enter the path to the file containing your private key: "
+    read KEY_FILE_PATH
+    
+    if [ ! -f "$KEY_FILE_PATH" ]; then
+        print_error "File not found: $KEY_FILE_PATH"
+        exit 1
+    fi
+    
+    # Copy the file content
+    print_info "Reading private key from file..."
+    cp "$KEY_FILE_PATH" private_key.txt
+    
+    # Read the key for validation
+    PRIVATE_KEY=$(cat private_key.txt)
+    if [ -z "$PRIVATE_KEY" ]; then
+        print_error "The file appears to be empty. Exiting."
+        rm private_key.txt
+        exit 1
+    fi
+else
+    print_error "Invalid choice. Please run the script again and select 1 or 2."
     exit 1
 fi
-
-# Create temporary file with private key
-print_info "Creating temporary file with private key..."
-echo -n "$PRIVATE_KEY" > private_key.txt
 
 # Encrypt the key
 print_info "Encrypting the private key using KMS..."

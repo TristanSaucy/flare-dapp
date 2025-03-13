@@ -20,7 +20,7 @@ from google.cloud import storage
 # Import from our modules
 from utils.logging_utils import setup_logging, log_message
 from utils.metadata_utils import get_metadata, get_env_var
-from security.key_management import download_encrypted_key, decrypt_key
+from security.key_management import download_encrypted_key, decrypt_key, get_private_key
 from ai.gemini_client import initialize_gemini, get_gemini_response
 from evm.connection import initialize_evm_connection, get_evm_connection
 from evm.routes import register_evm_routes
@@ -41,7 +41,6 @@ config = {
     'key_object': None,
     'project_id': None
 }
-decrypted_key = None
 gemini_model = None
 evm_connection = None
 
@@ -209,18 +208,20 @@ def load_key():
                    recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
                    use_cloud_logging=USE_CLOUD_LOGGING)
         
-        # Update global decrypted key for EVM connection
-        global decrypted_key
-        decrypted_key = decrypted_key_bytes
+        # Store the key in the environment variable
+        os.environ['PRIVATE_KEY'] = decrypted_key_bytes.decode('utf-8').strip()
+        log_message("INFO", "Stored private key in environment variable", 
+                   recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
+                   use_cloud_logging=USE_CLOUD_LOGGING)
         
         # Derive the address from the private key
         address = None
         try:
             from eth_account import Account
             
-            # Convert bytes to string
-            private_key_str = decrypted_key_bytes.decode('utf-8').strip()
-            log_message("INFO", f"Decoded private key string, length: {len(private_key_str)}", 
+            # Get the private key from environment variable
+            private_key_str = os.environ['PRIVATE_KEY']
+            log_message("INFO", f"Retrieved private key string, length: {len(private_key_str)}", 
                        recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
                        use_cloud_logging=USE_CLOUD_LOGGING)
             
@@ -230,6 +231,8 @@ def load_key():
                 log_message("INFO", "Added 0x prefix to private key", 
                            recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
                            use_cloud_logging=USE_CLOUD_LOGGING)
+                # Update the environment variable with the prefixed key
+                os.environ['PRIVATE_KEY'] = private_key_str
             
             # Log key format (without revealing the actual key)
             log_message("INFO", f"Private key format check - starts with 0x: {private_key_str.startswith('0x')}, length: {len(private_key_str)}", 
@@ -275,7 +278,7 @@ def load_key():
 
 def main():
     """Main entry point for the application."""
-    global key_retrieved, config, decrypted_key, gemini_model, evm_connection
+    global key_retrieved, config, gemini_model, evm_connection
     
     try:
         log_message("INFO", "Starting Confidential Space application", recent_logs=recent_logs,
@@ -347,42 +350,23 @@ def main():
         # Try to download and decrypt the key
         try:
             encrypted_key = download_encrypted_key(input_bucket, key_object_name)
-            decrypted_key = decrypt_key(encrypted_key, kms_key_name)
+            decrypted_key_bytes = decrypt_key(encrypted_key, kms_key_name)
+            
+            # Store the key in the environment variable
+            os.environ['PRIVATE_KEY'] = decrypted_key_bytes.decode('utf-8').strip()
             
             # Log success (but don't log the actual key content for security)
             log_message("INFO", "Successfully retrieved and decrypted the key", 
-                       key_length=len(decrypted_key), recent_logs=recent_logs,
+                       key_length=len(os.environ['PRIVATE_KEY']), recent_logs=recent_logs,
                        logger=logger, cloud_logger=cloud_logger, use_cloud_logging=USE_CLOUD_LOGGING)
             
-            # For demonstration, print the first few characters of the key
-            key_preview = decrypted_key[:10].decode('utf-8') + "..." if len(decrypted_key) > 10 else decrypted_key.decode('utf-8')
-            log_message("INFO", f"Key preview: {key_preview}", recent_logs=recent_logs,
-                       logger=logger, cloud_logger=cloud_logger, use_cloud_logging=USE_CLOUD_LOGGING)
             
             # Verify that the key is valid by deriving the address
             try:
                 from eth_account import Account
-                
-                # Convert bytes to string
-                private_key_str = decrypted_key.decode('utf-8').strip()
-                log_message("INFO", f"Decoded private key string, length: {len(private_key_str)}", 
-                           recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
-                           use_cloud_logging=USE_CLOUD_LOGGING)
-                
-                # Ensure the private key has the 0x prefix
-                if not private_key_str.startswith('0x'):
-                    private_key_str = '0x' + private_key_str
-                    log_message("INFO", "Added 0x prefix to private key", 
-                               recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
-                               use_cloud_logging=USE_CLOUD_LOGGING)
-                
-                # Log key format (without revealing the actual key)
-                log_message("INFO", f"Private key format check - starts with 0x: {private_key_str.startswith('0x')}, length: {len(private_key_str)}", 
-                           recent_logs=recent_logs, logger=logger, cloud_logger=cloud_logger, 
-                           use_cloud_logging=USE_CLOUD_LOGGING)
-                
+
                 # Derive the address from the private key
-                account = Account.from_key(private_key_str)
+                account = Account.from_key(os.environ['PRIVATE_KEY'])
                 address = account.address
                 
                 log_message("INFO", f"Successfully derived address from startup key: {address}", 
