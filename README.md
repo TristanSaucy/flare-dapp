@@ -136,36 +136,69 @@ If you encounter issues:
    gcloud logging read "resource.type=gce_instance AND resource.labels.instance_id=$(gcloud compute instances describe <vm-name> --zone=<zone> --format='value(id)')"
    ```
 
-## Monitoring Confidential Space
+## ChatBot Overview
 
-Since you cannot SSH into a Confidential Space VM, use these methods to monitor your application:
+### Introduction
 
-1. **View serial port output** (most useful for boot and initialization issues):
-   ```bash
-   gcloud compute instances get-serial-port-output <vm-name> --zone=<zone> | tail -n 100
-   ```
+Our AI-powered chatbot provides a seamless interface for interacting with SparkDEX, a decentralized exchange on the Flare network. The chatbot combines natural language processing with blockchain functionality to make DeFi more accessible to users of all experience levels.
 
-2. **Check Cloud Logging** (for application logs):
-   ```bash
-   # Basic logs
-   gcloud logging read "resource.type=gce_instance AND resource.labels.instance_id=$(gcloud compute instances describe <vm-name> --zone=<zone> --format='value(id)')" --limit=50
-   
-   # Filter for specific severity
-   gcloud logging read "resource.type=gce_instance AND severity>=ERROR AND resource.labels.instance_id=$(gcloud compute instances describe <vm-name> --zone=<zone> --format='value(id)')" --limit=20
-   
-   # Stream logs in real-time
-   gcloud logging read "resource.type=gce_instance AND resource.labels.instance_id=$(gcloud compute instances describe <vm-name> --zone=<zone> --format='value(id)')" --limit=10 --format='default' --freshness=1d --follow
-   ```
+### Key Capabilities
 
-3. **Check container status** through the TEE guest agent logs:
-   ```bash
-   gcloud logging read "resource.type=gce_instance AND logName:projects/<project-id>/logs/tee-guest-agent AND resource.labels.instance_id=$(gcloud compute instances describe <vm-name> --zone=<zone> --format='value(id)')" --limit=20
-   ```
+#### Token Swapping
+- Execute token swaps directly through conversation
+- Get real-time price quotes before confirming transactions
+- Set custom slippage tolerance to protect your trades
+- View transaction status and confirmation details
 
-4. **Monitor VM health metrics** in Cloud Monitoring:
-   - Navigate to Cloud Monitoring in the Google Cloud Console
-   - Create a dashboard for your VM with CPU, memory, and disk metrics
-   - Set up alerts for any anomalies
+#### Liquidity Management
+- Add liquidity to pools with simple commands
+- Create new liquidity pools when needed
+- View your active liquidity positions
+- Monitor pool performance and statistics
+
+#### Market Information
+- Get current token prices and exchange rates
+- View detailed pool information including fees, liquidity, and price ranges
+- Access historical trading data and volume statistics
+- Monitor market trends across different token pairs
+
+#### Wallet Integration
+- Connect securely to your blockchain wallet
+- Check token balances across multiple assets
+- View transaction history
+- Receive notifications about important account activities
+
+#### Educational Resources
+- Learn about DeFi concepts through interactive explanations
+- Access guides on using SparkDEX features
+- Receive personalized recommendations based on your experience level
+- Get answers to frequently asked questions about blockchain and trading
+
+### Technical Features
+
+- **Secure Authentication**: Connect your wallet without exposing private keys
+- **Real-time Data**: Access up-to-date blockchain information
+- **Transaction Simulation**: Preview transaction outcomes before execution
+- **Gas Optimization**: Recommendations for optimal gas settings
+- **Multi-chain Support**: Interact with multiple blockchain networks
+- **Contextual Memory**: The bot remembers your preferences and previous interactions
+
+### Getting Started
+
+To start using the chatbot, simply type a greeting or ask a question about SparkDEX. Here are some example commands to try:
+
+- "What's the current price of FLR?"
+- "I want to swap 10 USDC for FLR"
+- "Show me the WFLR/USDC pool details"
+- "Add liquidity to the FLR/USDC pool"
+- "What are my current liquidity positions?"
+- "Explain how concentrated liquidity works"
+
+The chatbot will guide you through any complex processes and confirm important actions before execution.
+
+### Feedback and Support
+
+We're constantly improving our chatbot based on user feedback. If you encounter any issues or have suggestions for new features, please let us know through the feedback button or by opening an issue in this repository.
 
 ## License
 
