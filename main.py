@@ -331,8 +331,8 @@ def main():
                    logger=logger, cloud_logger=cloud_logger, use_cloud_logging=USE_CLOUD_LOGGING)
         
         # Get EVM RPC URL from environment variable if available
-        evm_rpc_url = get_env_var("EVM_RPC_URL", required=False, default="https://coston-api.flare.network/ext/bc/C/rpc")
-        evm_network = get_env_var("EVM_NETWORK", default="flare-coston")
+        evm_rpc_url = get_env_var("EVM_RPC_URL", required=False, default="https://flare-api.flare.network/ext/bc/C/rpc")
+        evm_network = get_env_var("EVM_NETWORK", default="flare")
         
         evm_connection = initialize_evm_connection(evm_rpc_url, evm_network)
         
