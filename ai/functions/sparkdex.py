@@ -477,7 +477,7 @@ def get_perp_markets():
             "status": "error"
         }
 
-def swap_tokens(token_in_address: str, token_out_address: str, amount_in: float, slippage: float = 0.5, private_key: str = None):
+def swap_tokens(token_in_address: str, token_out_address: str, amount_in: str, slippage: float = 0.5, private_key: str = None):
     """
     Swap tokens on SparkDEX.
     
@@ -492,30 +492,38 @@ def swap_tokens(token_in_address: str, token_out_address: str, amount_in: float,
         A dictionary containing the transaction details
     """
     try:
+        logger.info(f"Starting token swap: {token_in_address} -> {token_out_address}, amount: {amount_in}")
+        
         # Validate addresses
         if not Web3.is_address(token_in_address):
+            logger.error(f"Invalid input token address: {token_in_address}")
             return {
                 "error": f"Invalid input token address: {token_in_address}",
                 "status": "error"
             }
         
         if not Web3.is_address(token_out_address):
+            logger.error(f"Invalid output token address: {token_out_address}")
             return {
                 "error": f"Invalid output token address: {token_out_address}",
                 "status": "error"
             }
         
         # Get account from private key
+        logger.info("Getting account from private key")
         account, from_address = _get_account_from_private_key(private_key)
         if not account:
+            logger.error("Failed to get account from private key")
             return {
                 "error": "Failed to get account from private key",
                 "status": "error"
             }
         
         # Get Web3 connection
+        logger.info("Establishing Web3 connection")
         connection = get_evm_connection()
         if not connection or not connection.connected:
+            logger.error("Failed to connect to Ethereum node")
             return {
                 "error": "Failed to connect to Ethereum node",
                 "status": "error"
@@ -524,21 +532,26 @@ def swap_tokens(token_in_address: str, token_out_address: str, amount_in: float,
         web3 = connection.web3
         
         # Ensure PoA middleware is added
+        logger.debug("Ensuring PoA middleware is added")
         _ensure_poa_middleware(web3)
         
         # Get router contract
+        logger.info(f"Getting router contract at {SPARKDEX_CONTRACTS['swapRouter']}")
         router_address = SPARKDEX_CONTRACTS["swapRouter"]
         router_contract = _get_contract(router_address, "swap_router_abi")
         
         if not router_contract:
+            logger.error(f"Failed to get contract instance for {router_address}")
             return {
                 "error": f"Failed to get contract instance for {router_address}",
                 "status": "error"
             }
         
         # Get token contracts
+        logger.info(f"Getting token contract for {token_in_address}")
         token_in_contract = _get_contract(token_in_address)
         if not token_in_contract:
+            logger.error(f"Failed to get contract instance for {token_in_address}")
             return {
                 "error": f"Failed to get contract instance for {token_in_address}",
                 "status": "error"
@@ -546,18 +559,27 @@ def swap_tokens(token_in_address: str, token_out_address: str, amount_in: float,
         
         # Get token decimals
         try:
+            logger.info("Getting token decimals")
             decimals = token_in_contract.functions.decimals().call()
+            logger.debug(f"Token decimals: {decimals}")
             amount_in_wei = int(float(amount_in) * 10**decimals)
-        except Exception:
+            logger.info(f"Amount in wei: {amount_in_wei}")
+        except Exception as e:
+            logger.error(f"Error getting token decimals: {str(e)}")
             # Default to 18 decimals if we can't get the actual value
             amount_in_wei = int(float(amount_in) * 10**18)
+            logger.info(f"Using default 18 decimals. Amount in wei: {amount_in_wei}")
         
-        amount_in = int(amount_in)
+        amount_in_converted = int(amount_in)
 
         # Check allowance and approve if needed
         try:
+            logger.info(f"Checking token allowance for router {router_address}")
             allowance = token_in_contract.functions.allowance(from_address, router_address).call()
+            logger.debug(f"Current allowance: {allowance}")
+            
             if allowance < amount_in_wei:
+                logger.info("Allowance insufficient, approving tokens")
                 # Approve router to spend tokens
                 approve_tx = token_in_contract.functions.approve(
                     router_address,
@@ -572,25 +594,43 @@ def swap_tokens(token_in_address: str, token_out_address: str, amount_in: float,
                 
                 # Sign and send approval transaction using our helper function
                 try:
+                    logger.info("Signing and sending approval transaction")
                     tx_hash = _sign_and_send_transaction(web3, approve_tx, account)
-                    web3.eth.wait_for_transaction_receipt(tx_hash)
-                    logger.info(f"Approved router to spend tokens: {web3.to_hex(tx_hash)}")
+                    logger.info(f"Approval transaction sent: {tx_hash}")
+                    
+                    logger.info("Waiting for approval transaction receipt")
+                    receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+                    logger.info(f"Approval transaction confirmed: status={receipt.status}")
+                    
+                    if receipt.status != 1:
+                        logger.error("Approval transaction failed")
+                        return {
+                            "error": "Approval transaction failed",
+                            "tx_hash": web3.to_hex(tx_hash),
+                            "status": "error"
+                        }
                 except Exception as e:
+                    logger.error(f"Error approving tokens: {str(e)}")
                     return {
                         "error": f"Error approving tokens: {str(e)}",
                         "status": "error"
                     }
+            else:
+                logger.info("Token allowance sufficient, no approval needed")
         except Exception as e:
+            logger.error(f"Error checking allowance: {str(e)}")
             return {
                 "error": f"Error checking allowance: {str(e)}",
                 "status": "error"
             }
         
         # Get quote for minimum amount out
+        logger.info("Getting quote for swap")
         quoter_address = SPARKDEX_CONTRACTS["quoterV2"]
         quoter_contract = _get_contract(quoter_address, "quoter_v2_abi")
         
         if not quoter_contract:
+            logger.error(f"Failed to get contract instance for {quoter_address}")
             return {
                 "error": f"Failed to get contract instance for {quoter_address}",
                 "status": "error"
@@ -598,23 +638,34 @@ def swap_tokens(token_in_address: str, token_out_address: str, amount_in: float,
         
         # Default fee tier
         fee = 3000  # 0.3%
+        logger.info(f"Using fee tier: {fee} (0.3%)")
         
+        # Convert addresses to checksum format
+        token_in_checksum = Web3.to_checksum_address(token_in_address)
+        token_out_checksum = Web3.to_checksum_address(token_out_address)
+        logger.info(f"Converted token addresses to checksum format: {token_in_checksum}, {token_out_checksum}")
+
         # Try to get quote
         try:
+            logger.info("Preparing quote parameters")
             quote_params = {
-                'tokenIn': token_in_address,
-                'tokenOut': token_out_address,
+                'tokenIn': token_in_checksum,
+                'tokenOut': token_out_checksum,
                 'fee': fee,
                 'amountIn': amount_in_wei,
                 'sqrtPriceLimitX96': 0
             }
             
+            logger.info("Calling quoter contract")
             quote_result = quoter_contract.functions.quoteExactInputSingle(quote_params).call()
             amount_out = quote_result[0]
+            logger.info(f"Quote received: expected output amount = {amount_out}")
             
             # Apply slippage
             min_amount_out = int(amount_out * (1 - slippage / 100))
+            logger.info(f"Minimum amount out with {slippage}% slippage: {min_amount_out}")
         except Exception as e:
+            logger.error(f"Error getting quote: {str(e)}")
             return {
                 "error": f"Error getting quote: {str(e)}",
                 "status": "error"
@@ -623,50 +674,167 @@ def swap_tokens(token_in_address: str, token_out_address: str, amount_in: float,
         # Current timestamp plus 20 minutes
         current_time = int(time.time())
         deadline = current_time + 1200
+        logger.info(f"Setting transaction deadline: {deadline} (current time + 20 minutes)")
         
+        token_in_bytes = Web3.to_bytes(hexstr=token_in_checksum)
+        token_out_bytes = Web3.to_bytes(hexstr=token_out_checksum)
+        recipient_checksum = Web3.to_bytes(hexstr=Web3.to_checksum_address(from_address))
         # Build swap transaction
         try:
+            logger.info("Building swap transaction")
+            recipient_checksum = Web3.to_checksum_address(from_address)
+            logger.info(f"Converted recipient address to checksum format: {recipient_checksum}")
+            
             swap_params = {
-                'tokenIn': token_in_address,
-                'tokenOut': token_out_address,
+                'tokenIn': token_in_bytes,
+                'tokenOut': token_out_bytes,
                 'fee': fee,
-                'recipient': from_address,
+                'recipient': recipient_checksum,
                 'deadline': deadline,
                 'amountIn': amount_in_wei,
                 'amountOutMinimum': min_amount_out,
                 'sqrtPriceLimitX96': 0
             }
             
-            swap_tx = router_contract.functions.exactInputSingle(swap_params).build_transaction({
-                'from': from_address,
-                'nonce': web3.eth.get_transaction_count(from_address),
-                'gas': 600000,
-                'gasPrice': web3.eth.gas_price,
-                'chainId': web3.eth.chain_id,
-            })
+            logger.info(f"Swap parameters: {swap_params}")
+            logger.info("Parameter types:")
+            for key, value in swap_params.items():
+                logger.info(f"{key}: {value} (type: {type(value)})")
             
-            # Sign and send swap transaction using our helper function
             try:
-                tx_hash = _sign_and_send_transaction(web3, swap_tx, account)
-                logger.info(f"Swap transaction sent: {web3.to_hex(tx_hash)}")
-                
-                return {
-                    "transaction_hash": web3.to_hex(tx_hash),
-                    "from_address": from_address,
-                    "token_in": token_in_address,
-                    "token_out": token_out_address,
-                    "amount_in": amount_in,
-                    "amount_in_wei": amount_in_wei,
-                    "expected_amount_out": amount_out,
-                    "min_amount_out": min_amount_out,
-                    "status": "success"
-                }
+                nonce = web3.eth.get_transaction_count(from_address)
+                logger.info(f"Current nonce: {nonce}")
             except Exception as e:
+                logger.error(f"Error getting transaction count: {str(e)}")
                 return {
-                    "error": f"Error sending swap transaction: {str(e)}",
+                    "error": f"Error getting transaction count: {str(e)}",
                     "status": "error"
                 }
+            
+            try:
+                gas_price = web3.eth.gas_price
+                logger.info(f"Current gas price: {gas_price}")
+            except Exception as e:
+                logger.error(f"Error getting gas price: {str(e)}")
+                return {
+                    "error": f"Error getting gas price: {str(e)}",
+                    "status": "error"
+                }
+            
+            try:
+                chain_id = web3.eth.chain_id
+                logger.info(f"Chain ID: {chain_id}")
+            except Exception as e:
+                logger.error(f"Error getting chain ID: {str(e)}")
+                return {
+                    "error": f"Error getting chain ID: {str(e)}",
+                    "status": "error"
+                }
+            
+            try:
+                # Build transaction with more detailed error handling
+                tx_params = {
+                    'from': from_address,
+                    'nonce': nonce,
+                    'gas': 600000,
+                    'gasPrice': gas_price,
+                    'chainId': chain_id,
+                }
+                logger.info(f"Transaction parameters: {tx_params}")
+                
+                # First check if the function exists
+                if not hasattr(router_contract.functions, 'exactInputSingle'):
+                    logger.error("Router contract does not have exactInputSingle function")
+                    return {
+                        "error": "Router contract does not have exactInputSingle function",
+                        "status": "error"
+                    }
+                
+                # Build the transaction
+                swap_tx = router_contract.functions.exactInputSingle(swap_params).build_transaction(tx_params)
+                logger.info("Swap transaction built successfully")
+            except Exception as e:
+                logger.error(f"Error building transaction object: {str(e)}")
+                return {
+                    "error": f"Error building transaction object: {str(e)}",
+                    "status": "error"
+                }
+            
+            # Sign and send swap transaction using our helper function
+            logger.info("Starting inline transaction signing process")
+            try:
+                # Log transaction details
+                logger.info(f"Transaction to sign: gas={swap_tx.get('gas')}, nonce={swap_tx.get('nonce')}")
+                logger.info(f"Transaction destination: {swap_tx.get('to')}")
+                
+                # Ensure POA middleware is added
+                logger.debug("Ensuring POA middleware is added")
+                if ExtraDataToPOAMiddleware not in web3.middleware_onion:
+                    web3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+                    logger.debug("Added POA middleware")
+                
+                # Log account details (safely)
+                logger.info(f"Signing with account: {account.address}")
+                
+                # Sign the transaction
+                logger.info("Signing transaction...")
+                signed_tx = web3.eth.account.sign_transaction(swap_tx, private_key=account.key)
+                logger.info("Transaction signed successfully")
+                
+                # Send the transaction
+                logger.info("Sending raw transaction to network...")
+                if hasattr(signed_tx, 'raw_transaction'):
+                    logger.debug("Using raw_transaction attribute (newer Web3.py)")
+                    tx_hash = web3.eth.send_raw_transaction(signed_tx.raw_transaction)
+                elif hasattr(signed_tx, 'rawTransaction'):
+                    logger.debug("Using rawTransaction attribute (older Web3.py)")
+                    tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+                else:
+                    error_msg = "Cannot find raw transaction data in signed transaction"
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
+                
+                logger.info(f"Raw transaction sent successfully with hash: {tx_hash.hex()}")
+                
+                # Don't convert to hex string here - keep the original tx_hash object
+                # This should avoid the type conversion issue
+                
+            except Exception as e:
+                error_msg = f"Error in inline transaction signing/sending: {str(e)}"
+                logger.error(error_msg)
+                
+                # Log more details about the transaction that failed
+                try:
+                    logger.error("Transaction that failed:")
+                    for key, value in swap_tx.items():
+                        logger.error(f"  {key}: {value}")
+                except:
+                    logger.error("Could not log transaction details")
+                    
+                raise Exception(error_msg)
+            
+            # Now continue with the original code, using tx_hash directly
+            logger.info(f"Transaction hash (for logging): {tx_hash.hex()}")
+            logger.info(f"Transaction hash type: {type(tx_hash)}")
+
+            # Wait for receipt using the original tx_hash object
+            logger.info("Waiting for transaction receipt...")
+            receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+            
+            logger.info("Swap completed successfully")
+            return {
+                "transaction_hash": web3.to_hex(tx_hash),
+                "from_address": from_address,
+                "token_in": token_in_address,
+                "token_out": token_out_address,
+                "amount_in": amount_in_converted,
+                "amount_in_wei": amount_in_wei,
+                "expected_amount_out": amount_out,
+                "min_amount_out": min_amount_out,
+                "status": "success"
+            }
         except Exception as e:
+            logger.error(f"Error building swap transaction: {str(e)}")
             return {
                 "error": f"Error building swap transaction: {str(e)}",
                 "status": "error"
@@ -1647,35 +1815,81 @@ def calculate_price_from_sqrt_price_x96(sqrt_price_x96: int, token0_decimals: in
 def _sign_and_send_transaction(web3, tx, account):
     """Sign and send a transaction."""
     try:
-        _ensure_poa_middleware(web3)
+        logger.info("Starting inline transaction signing process")
+        try:
+            # Log transaction details
+            logger.info(f"Transaction to sign: gas={tx.get('gas')}, nonce={tx.get('nonce')}")
+            logger.info(f"Transaction destination: {tx.get('to')}")
+            
+            # Ensure POA middleware is added
+            logger.debug("Ensuring POA middleware is added")
+            if ExtraDataToPOAMiddleware not in web3.middleware_onion:
+                web3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+                logger.debug("Added POA middleware")
+            
+            # Log account details (safely)
+            logger.info(f"Signing with account: {account.address}")
+            
+            # Sign the transaction
+            logger.info("Signing transaction...")
+            signed_tx = web3.eth.account.sign_transaction(tx, private_key=account.key)
+            logger.info("Transaction signed successfully")
+            
+            # Send the transaction
+            logger.info("Sending raw transaction to network...")
+            if hasattr(signed_tx, 'raw_transaction'):
+                logger.debug("Using raw_transaction attribute (newer Web3.py)")
+                tx_hash = web3.eth.send_raw_transaction(signed_tx.raw_transaction)
+            elif hasattr(signed_tx, 'rawTransaction'):
+                logger.debug("Using rawTransaction attribute (older Web3.py)")
+                tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+            else:
+                error_msg = "Cannot find raw transaction data in signed transaction"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+            
+            logger.info(f"Raw transaction sent successfully with hash: {tx_hash.hex()}")
+            
+            # Don't convert to hex string here - keep the original tx_hash object
+            # This should avoid the type conversion issue
+            
+        except Exception as e:
+            error_msg = f"Error in inline transaction signing/sending: {str(e)}"
+            logger.error(error_msg)
+            
+            # Log more details about the transaction that failed
+            try:
+                logger.error("Transaction that failed:")
+                for key, value in tx.items():
+                    logger.error(f"  {key}: {value}")
+            except:
+                logger.error("Could not log transaction details")
+            
+            raise Exception(error_msg)
         
-        # Sign the transaction
-        signed_tx = web3.eth.account.sign_transaction(tx, private_key=account.key)
+        # Now continue with the original code, using tx_hash directly
+        logger.info(f"Transaction hash (for logging): {tx_hash.hex()}")
+        logger.info(f"Transaction hash type: {type(tx_hash)}")
+
+        # Wait for receipt using the original tx_hash object
+        logger.info("Waiting for transaction receipt...")
+        receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
         
-        # Send the transaction using the correct attribute name
-        if hasattr(signed_tx, 'raw_transaction'):
-            # For newer Web3.py versions with underscore
-            tx_hash = web3.eth.send_raw_transaction(signed_tx.raw_transaction)
-        elif hasattr(signed_tx, 'rawTransaction'):
-            # For versions without underscore
-            tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
-        else:
-            # Fallback if neither attribute exists
-            raise Exception("Cannot find raw transaction data in signed transaction")
-        
-        # Return the transaction hash as a hexadecimal string
-        # Use to_hex instead of toHex for newer Web3.py versions
-        if hasattr(web3, 'to_hex'):
-            return web3.to_hex(tx_hash)
-        elif hasattr(web3, 'toHex'):
-            return web3.toHex(tx_hash)
-        else:
-            # Fallback if neither method exists
-            return tx_hash.hex() if hasattr(tx_hash, 'hex') else str(tx_hash)
+        return tx_hash
         
     except Exception as e:
-        logging.error(f"Error signing/sending transaction: {str(e)}")
-        raise Exception(f"Error signing/sending transaction: {str(e)}")
+        error_msg = f"Error in inline transaction signing/sending: {str(e)}"
+        logger.error(error_msg)
+        
+        # Log more details about the transaction that failed
+        try:
+            logger.error("Transaction that failed:")
+            for key, value in tx.items():
+                logger.error(f"  {key}: {value}")
+        except:
+            logger.error("Could not log transaction details")
+            
+        raise Exception(error_msg)
 
 def _ensure_poa_middleware(web3: object) -> bool:
     """Ensure that the POA middleware is injected into the web3 instance."""
