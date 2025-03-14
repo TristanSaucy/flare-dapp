@@ -2,6 +2,7 @@
 Gemini AI client for the Confidential Space application.
 """
 import os
+import logging
 from google.cloud import aiplatform
 from vertexai.preview.generative_models import (
     GenerativeModel, 
@@ -13,55 +14,11 @@ from vertexai.preview.generative_models import (
     AutomaticFunctionCallingResponder
 )
 from utils.metadata_utils import get_metadata, get_env_var
+from ai.functions import available_functions
 
-# Sample Ethereum functions that will be exposed to the model
-def get_eth_balance(address: str):
-    """
-    Get the Ethereum balance for a given address.
-    
-    Args:
-        address: The Ethereum address to check
-        
-    Returns:
-        A dictionary containing the address and its balance
-    """
-    # This is a mock implementation - in production, you would use web3.py to get the actual balance
-    # In your real implementation, you could use:
-    # from web3 import Web3
-    # from evm.connection import get_evm_connection
-    # web3 = get_evm_connection().web3
-    # balance = web3.eth.get_balance(address)
-    # return {"address": address, "balance": web3.from_wei(balance, 'ether'), "unit": "ETH"}
-    
-    # Mock implementation for demonstration
-    return {
-        "address": address,
-        "balance": "10.5",
-        "unit": "ETH"
-    }
-
-def estimate_gas_fee(from_address: str, to_address: str, value: str = "0"):
-    """
-    Estimate the gas fee for a transaction.
-    
-    Args:
-        from_address: The sender's Ethereum address
-        to_address: The recipient's Ethereum address
-        value: The amount of ETH to send (in ether)
-        
-    Returns:
-        A dictionary containing the estimated gas fee
-    """
-    # Mock implementation for demonstration
-    return {
-        "from": from_address,
-        "to": to_address,
-        "value": value,
-        "estimated_gas": "0.002",
-        "unit": "ETH",
-        "gas_price": "50",
-        "unit_price": "gwei"
-    }
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def initialize_gemini():
     """Initialize the Vertex AI client for Gemini."""
@@ -94,25 +51,47 @@ def initialize_gemini():
         # Initialize Vertex AI
         aiplatform.init(project=project_id, location=location)
         
-        # Create function declarations from our Ethereum functions
-        eth_balance_func = FunctionDeclaration.from_func(get_eth_balance)
-        gas_estimate_func = FunctionDeclaration.from_func(estimate_gas_fee)
+        # Create function declarations for all available functions
+        function_declarations = []
+        for func_name, func in available_functions.items():
+            function_declarations.append(FunctionDeclaration.from_func(func))
         
-        # Create a tool that groups related functions
-        ethereum_tool = Tool(
-            function_declarations=[eth_balance_func, gas_estimate_func],
+        # Create a single tool that contains all functions
+        blockchain_tool = Tool(
+            function_declarations=function_declarations,
         )
         
-        # Create the model instance with tools
+        # Create the model instance with the tool
         model = GenerativeModel(
             "gemini-2.0-pro-exp-02-05",  # Use the experimental Gemini 2.0 Pro model
-            tools=[ethereum_tool],
-            system_instruction="You are a helpful assistant that can provide information about the Flare blockchain ecosystem. You can check balances and estimate gas fees."
+            tools=[blockchain_tool],
+            system_instruction="""You are a helpful assistant that can provide information about the Ethereum blockchain and SparkDEX decentralized exchange on Flare Network.
+
+For Ethereum, you can check balances, estimate gas fees, send transactions, and check transaction status. When the user asks about 'my address' or 'my balance', use the get_my_address function which retrieves their address from the environment variable.
+
+For SparkDEX, you can provide information about pools, tokens, prices, and liquidity positions. When discussing SparkDEX, always include the following guidance:
+
+1. Risk Assessment: Always inform users about the risks of decentralized finance, including smart contract risks, impermanent loss in liquidity pools, and price volatility.
+
+2. Transaction Confirmation: NEVER execute any transaction (swap, liquidity provision, etc.) without explicit confirmation from the user. Always present the details of the transaction and ask for confirmation before proceeding.
+
+3. Educational Guidance: Provide educational context when users ask about complex DeFi concepts like impermanent loss, slippage, or price impact.
+
+4. Fee Awareness: Always mention the applicable fees for any operation on SparkDEX, including swap fees, gas costs, and any other relevant costs.
+
+5. Security Best Practices: Remind users about security best practices when interacting with DeFi protocols, such as checking contract addresses and starting with small amounts for unfamiliar operations.
+
+When handling any transaction that involves user funds, you must:
+- Present all relevant details of the transaction
+- Clearly state the risks involved
+- Ask for explicit confirmation
+- Provide an option to cancel
+- Never proceed without clear user approval"""
         )
         
         # Define generation config (will be used when generating content)
         generation_config = GenerationConfig(
-            temperature=0.7,
+            temperature=0.2,  # Lower temperature for more deterministic responses
             max_output_tokens=1024,
             top_p=0.95,
             top_k=40
@@ -120,7 +99,7 @@ def initialize_gemini():
         
         # Set up automatic function calling
         afc_responder = AutomaticFunctionCallingResponder(
-            max_automatic_function_calls=3,
+            max_automatic_function_calls=7,
         )
         
         # Start a chat session with the responder
@@ -133,14 +112,16 @@ def initialize_gemini():
             "model": model,
             "chat": chat,
             "generation_config": generation_config,
-            "tools": [ethereum_tool],
+            "tools": [blockchain_tool],
             "responder": afc_responder,
             "initialized": True
         }
         
+        logger.info(f"Gemini model initialized successfully with {len(function_declarations)} blockchain functions")
+        
         return gemini_model
     except Exception as e:
-        print(f"Failed to initialize Gemini: {str(e)}")
+        logger.error(f"Failed to initialize Gemini: {str(e)}")
         return None
 
 def get_gemini_response(prompt, gemini_model_config):
@@ -164,7 +145,7 @@ def get_gemini_response(prompt, gemini_model_config):
                 model = GenerativeModel(
                     "gemini-2.0-pro-exp-02-05",
                     tools=tools,
-                    system_instruction="You are a helpful assistant that can provide information about Ethereum blockchain. You can check balances and estimate gas fees."
+                    system_instruction="""You are a helpful assistant that can provide information about Ethereum blockchain and SparkDEX decentralized exchange. You can check balances, estimate gas fees, send transactions, and check transaction status. For SparkDEX operations, always provide risk assessments and require explicit user confirmation before executing any transactions."""
                 )
                 gemini_model_config["model"] = model
             
@@ -175,6 +156,10 @@ def get_gemini_response(prompt, gemini_model_config):
                 chat = model.start_chat()
                 
             gemini_model_config["chat"] = chat
+            logger.info("Created new chat session")
+        
+        # Log the user query
+        logger.info(f"User query: {prompt}")
         
         # Send the message to the ongoing chat session with generation config
         if generation_config:
@@ -184,10 +169,12 @@ def get_gemini_response(prompt, gemini_model_config):
         
         # Extract the text from the response
         response_text = response.text
+        logger.info(f"Generated response of length {len(response_text)}")
+        
         return response_text
     except Exception as e:
         error_msg = f"Failed to get Gemini response: {str(e)}"
-        print(error_msg)  # Log the error
+        logger.error(error_msg)
         
         # If there's an error with the chat session, try to create a new one
         try:
@@ -201,8 +188,9 @@ def get_gemini_response(prompt, gemini_model_config):
                     chat = model.start_chat()
                     
                 gemini_model_config["chat"] = chat
+                logger.info("Restarted chat session after error")
                 return "I had to restart our conversation. How can I help you?"
         except Exception as reset_error:
-            print(f"Failed to reset chat session: {str(reset_error)}")
+            logger.error(f"Failed to reset chat session: {str(reset_error)}")
             
         return f"I encountered an error while processing your request. Please try again later or check the application logs for more information." 
