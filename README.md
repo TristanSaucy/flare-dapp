@@ -20,6 +20,10 @@ chmod +x scripts/setup_confidential_space.sh
 
 # Run the setup script to configure everything
 ./scripts/setup_confidential_space.sh
+
+# Encrypt a key for use with the application
+./scripts/encrypt_key.sh
+
 ```
 
 The setup script will guide you through the entire process:
@@ -89,12 +93,6 @@ If you prefer to run each step manually instead of using the guided setup:
    ./scripts/monitor_cs_vm.sh
    ```
    This interactive script provides various options to monitor your VM and view logs.
-
-6. Rebuild and redeploy after making changes:
-   ```
-   ./scripts/rebuild_and_redeploy.sh
-   ```
-   This script streamlines the process of rebuilding and redeploying your application.
 
 ## How It Works
 
