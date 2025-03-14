@@ -11,7 +11,8 @@ from decimal import Decimal
 from eth_account import Account
 from evm.connection import get_evm_connection
 from .abi_utils import load_abi, get_function_abi, get_event_abi
-
+from web3.middleware import ExtraDataToPOAMiddleware
+import time
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -106,7 +107,7 @@ def _get_contract(contract_address, abi=None):
     
     Args:
         contract_address: The contract address
-        abi: The contract ABI (optional)
+        abi: The contract ABI (optional) or ABI name (e.g., "v3_pool_abi")
         
     Returns:
         A Web3 contract instance
@@ -120,10 +121,23 @@ def _get_contract(contract_address, abi=None):
         
         web3 = connection.web3
         
+        # Add PoA middleware if not already added
+        _ensure_poa_middleware(web3)
+        
         # Get ABI if not provided
         if not abi:
             abi = _get_contract_abi(contract_address)
             if not abi:
+                return None
+        elif isinstance(abi, str):
+            # If abi is a string, it's an ABI name, so load it
+            try:
+                abi = load_abi(abi)
+                if not abi:
+                    logger.error(f"Failed to load ABI: {abi}")
+                    return None
+            except Exception as e:
+                logger.error(f"Error loading ABI {abi}: {str(e)}")
                 return None
         
         # Create contract instance
@@ -132,6 +146,8 @@ def _get_contract(contract_address, abi=None):
     except Exception as e:
         logger.error(f"Error creating contract instance for {contract_address}: {str(e)}")
         return None
+
+
 
 def get_sparkdex_info():
     """
@@ -176,7 +192,7 @@ def get_v3_factory_info():
     """
     try:
         factory_address = SPARKDEX_CONTRACTS["v3Factory"]
-        factory_contract = _get_contract(factory_address)
+        factory_contract = _get_contract(factory_address, "v3_factory_abi")
         
         if not factory_contract:
             return {
@@ -251,7 +267,7 @@ def get_pool_info(token0_address: str, token1_address: str, fee: int = 3000):
         
         # Get factory contract
         factory_address = SPARKDEX_CONTRACTS["v3Factory"]
-        factory_contract = _get_contract(factory_address)
+        factory_contract = _get_contract(factory_address, "v3_factory_abi")
         
         if not factory_contract:
             return {
@@ -270,7 +286,7 @@ def get_pool_info(token0_address: str, token1_address: str, fee: int = 3000):
                 }
             
             # Get pool contract
-            pool_contract = _get_contract(pool_address)
+            pool_contract = _get_contract(pool_address, "v3_pool_abi")
             
             if not pool_contract:
                 return {
@@ -344,7 +360,7 @@ def get_token_price(token_address: str, quote_token_address: str = "0x1D1F1A7280
         
         # Get quoter contract
         quoter_address = SPARKDEX_CONTRACTS["quoterV2"]
-        quoter_contract = _get_contract(quoter_address)
+        quoter_contract = _get_contract(quoter_address, "quoter_v2_abi")
         
         if not quoter_contract:
             return {
@@ -461,7 +477,7 @@ def get_perp_markets():
             "status": "error"
         }
 
-def swap_tokens(token_in_address: str, token_out_address: str, amount_in: str, slippage: float = 0.5, private_key: str = None):
+def swap_tokens(token_in_address: str, token_out_address: str, amount_in: float, slippage: float = 0.5, private_key: str = None):
     """
     Swap tokens on SparkDEX.
     
@@ -507,9 +523,12 @@ def swap_tokens(token_in_address: str, token_out_address: str, amount_in: str, s
         
         web3 = connection.web3
         
+        # Ensure PoA middleware is added
+        _ensure_poa_middleware(web3)
+        
         # Get router contract
         router_address = SPARKDEX_CONTRACTS["swapRouter"]
-        router_contract = _get_contract(router_address)
+        router_contract = _get_contract(router_address, "swap_router_abi")
         
         if not router_contract:
             return {
@@ -533,6 +552,8 @@ def swap_tokens(token_in_address: str, token_out_address: str, amount_in: str, s
             # Default to 18 decimals if we can't get the actual value
             amount_in_wei = int(float(amount_in) * 10**18)
         
+        amount_in = int(amount_in)
+
         # Check allowance and approve if needed
         try:
             allowance = token_in_contract.functions.allowance(from_address, router_address).call()
@@ -545,24 +566,29 @@ def swap_tokens(token_in_address: str, token_out_address: str, amount_in: str, s
                     'from': from_address,
                     'nonce': web3.eth.get_transaction_count(from_address),
                     'gas': 100000,
-                    'gasPrice': web3.eth.gas_price
+                    'gasPrice': web3.eth.gas_price,
+                    'chainId': web3.eth.chain_id
                 })
                 
-                # Sign and send approval transaction
-                signed_tx = web3.eth.account.sign_transaction(approve_tx, account.key)
-                tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
-                web3.eth.wait_for_transaction_receipt(tx_hash)
-                
-                logger.info(f"Approved router to spend tokens: {web3.to_hex(tx_hash)}")
+                # Sign and send approval transaction using our helper function
+                try:
+                    tx_hash = _sign_and_send_transaction(web3, approve_tx, account)
+                    web3.eth.wait_for_transaction_receipt(tx_hash)
+                    logger.info(f"Approved router to spend tokens: {web3.to_hex(tx_hash)}")
+                except Exception as e:
+                    return {
+                        "error": f"Error approving tokens: {str(e)}",
+                        "status": "error"
+                    }
         except Exception as e:
             return {
-                "error": f"Error approving tokens: {str(e)}",
+                "error": f"Error checking allowance: {str(e)}",
                 "status": "error"
             }
         
         # Get quote for minimum amount out
         quoter_address = SPARKDEX_CONTRACTS["quoterV2"]
-        quoter_contract = _get_contract(quoter_address)
+        quoter_contract = _get_contract(quoter_address, "quoter_v2_abi")
         
         if not quoter_contract:
             return {
@@ -595,7 +621,8 @@ def swap_tokens(token_in_address: str, token_out_address: str, amount_in: str, s
             }
         
         # Current timestamp plus 20 minutes
-        deadline = web3.eth.get_block('latest').timestamp + 1200
+        current_time = int(time.time())
+        deadline = current_time + 1200
         
         # Build swap transaction
         try:
@@ -604,6 +631,7 @@ def swap_tokens(token_in_address: str, token_out_address: str, amount_in: str, s
                 'tokenOut': token_out_address,
                 'fee': fee,
                 'recipient': from_address,
+                'deadline': deadline,
                 'amountIn': amount_in_wei,
                 'amountOutMinimum': min_amount_out,
                 'sqrtPriceLimitX96': 0
@@ -612,30 +640,35 @@ def swap_tokens(token_in_address: str, token_out_address: str, amount_in: str, s
             swap_tx = router_contract.functions.exactInputSingle(swap_params).build_transaction({
                 'from': from_address,
                 'nonce': web3.eth.get_transaction_count(from_address),
-                'gas': 300000,
-                'gasPrice': web3.eth.gas_price
+                'gas': 600000,
+                'gasPrice': web3.eth.gas_price,
+                'chainId': web3.eth.chain_id,
             })
             
-            # Sign and send swap transaction
-            signed_tx = web3.eth.account.sign_transaction(swap_tx, account.key)
-            tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
-            
-            logger.info(f"Swap transaction sent: {web3.to_hex(tx_hash)}")
-            
-            return {
-                "transaction_hash": web3.to_hex(tx_hash),
-                "from_address": from_address,
-                "token_in": token_in_address,
-                "token_out": token_out_address,
-                "amount_in": amount_in,
-                "amount_in_wei": amount_in_wei,
-                "expected_amount_out": amount_out,
-                "min_amount_out": min_amount_out,
-                "status": "success"
-            }
+            # Sign and send swap transaction using our helper function
+            try:
+                tx_hash = _sign_and_send_transaction(web3, swap_tx, account)
+                logger.info(f"Swap transaction sent: {web3.to_hex(tx_hash)}")
+                
+                return {
+                    "transaction_hash": web3.to_hex(tx_hash),
+                    "from_address": from_address,
+                    "token_in": token_in_address,
+                    "token_out": token_out_address,
+                    "amount_in": amount_in,
+                    "amount_in_wei": amount_in_wei,
+                    "expected_amount_out": amount_out,
+                    "min_amount_out": min_amount_out,
+                    "status": "success"
+                }
+            except Exception as e:
+                return {
+                    "error": f"Error sending swap transaction: {str(e)}",
+                    "status": "error"
+                }
         except Exception as e:
             return {
-                "error": f"Error executing swap: {str(e)}",
+                "error": f"Error building swap transaction: {str(e)}",
                 "status": "error"
             }
     except Exception as e:
@@ -795,7 +828,7 @@ def get_detailed_pool_data(pool_address: str):
     """
     try:
         # Get pool contract
-        pool_contract = _get_contract(pool_address)
+        pool_contract = _get_contract(pool_address, "v3_pool_abi")
         if not pool_contract:
             return {
                 "error": f"Failed to get contract instance for pool {pool_address}",
@@ -822,11 +855,11 @@ def get_detailed_pool_data(pool_address: str):
         liquidity = pool_contract.functions.liquidity().call()
         
         # Calculate current price
-        sqrtPriceX96 = slot0[0]
+        sqrt_price_x96 = slot0[0]
         current_tick = slot0[1]
         
         # Price = (sqrtPriceX96 / 2^96)^2
-        price_raw = (sqrtPriceX96 / (2**96))**2
+        price_raw = (sqrt_price_x96 / (2**96))**2
         
         # Adjust for decimals
         price = price_raw * (10 ** (token0_decimals - token1_decimals))
@@ -850,7 +883,7 @@ def get_detailed_pool_data(pool_address: str):
             "fee": fee,
             "feePercent": fee / 10000,
             "liquidity": liquidity,
-            "sqrtPriceX96": sqrtPriceX96,
+            "sqrtPriceX96": sqrt_price_x96,
             "tick": current_tick,
             "price": price,
             "feeGrowthGlobal0X128": feeGrowthGlobal0X128,
@@ -990,4 +1023,678 @@ def get_token_balance(token_address: str, wallet_address: str = None):
         return {
             "error": error_msg,
             "status": "error"
-        } 
+        }
+
+def add_liquidity(token0_address: str, token1_address: str, amount0: str, amount1: str, 
+                 fee: int = 3000, tick_lower: int = None, tick_upper: int = None, 
+                 slippage: float = 0.5, private_key: str = None):
+    """
+    Add liquidity to a SparkDEX V3 pool.
+    
+    Args:
+        token0_address: The address of the first token in the pair
+        token1_address: The address of the second token in the pair
+        amount0: The amount of token0 to add
+        amount1: The amount of token1 to add
+        fee: The fee tier of the pool (default: 3000 = 0.3%)
+        tick_lower: The lower tick of the position (default: None, will use a standard range)
+        tick_upper: The upper tick of the position (default: None, will use a standard range)
+        slippage: The maximum slippage percentage (default: 0.5%)
+        private_key: The private key to use for the transaction (default: uses environment variable)
+        
+    Returns:
+        A dictionary containing the transaction details
+    """
+    try:
+        # Validate addresses
+        if not Web3.is_address(token0_address):
+            return {
+                "error": f"Invalid token0 address: {token0_address}",
+                "status": "error"
+            }
+        
+        if not Web3.is_address(token1_address):
+            return {
+                "error": f"Invalid token1 address: {token1_address}",
+                "status": "error"
+            }
+        
+        # Get account from private key
+        account, from_address = _get_account_from_private_key(private_key)
+        if not account:
+            return {
+                "error": "Failed to get account from private key",
+                "status": "error"
+            }
+        
+        # Get Web3 connection
+        connection = get_evm_connection()
+        if not connection or not connection.connected:
+            return {
+                "error": "Failed to connect to Ethereum node",
+                "status": "error"
+            }
+        
+        web3 = connection.web3
+        
+        # Ensure PoA middleware is added
+        _ensure_poa_middleware(web3)
+        
+        # Get position manager contract
+        nft_manager_address = SPARKDEX_CONTRACTS["nonfungiblePositionManager"]
+        nft_manager_contract = _get_contract(nft_manager_address)
+        
+        if not nft_manager_contract:
+            return {
+                "error": f"Failed to get contract instance for {nft_manager_address}",
+                "status": "error"
+            }
+        
+        # Get token contracts
+        token0_contract = _get_contract(token0_address)
+        if not token0_contract:
+            return {
+                "error": f"Failed to get contract instance for {token0_address}",
+                "status": "error"
+            }
+        
+        token1_contract = _get_contract(token1_address)
+        if not token1_contract:
+            return {
+                "error": f"Failed to get contract instance for {token1_address}",
+                "status": "error"
+            }
+        
+        # Get token decimals
+        try:
+            token0_decimals = token0_contract.functions.decimals().call()
+            token1_decimals = token1_contract.functions.decimals().call()
+            
+            amount0_wei = int(float(amount0) * 10**token0_decimals)
+            amount1_wei = int(float(amount1) * 10**token1_decimals)
+        except Exception as e:
+            return {
+                "error": f"Error getting token decimals: {str(e)}",
+                "status": "error"
+            }
+        
+        # Check if pool exists
+        factory_address = SPARKDEX_CONTRACTS["v3Factory"]
+        factory_contract = _get_contract(factory_address, "v3_factory_abi")
+        
+        if not factory_contract:
+            return {
+                "error": f"Failed to get contract instance for {factory_address}",
+                "status": "error"
+            }
+        
+        try:
+            pool_address = factory_contract.functions.getPool(token0_address, token1_address, fee).call()
+            
+            if pool_address == '0x0000000000000000000000000000000000000000':
+                # Pool doesn't exist, we need to create it
+                logger.info(f"Pool doesn't exist for {token0_address} and {token1_address} with fee {fee}, creating...")
+                
+                # Create pool transaction
+                create_pool_tx = factory_contract.functions.createPool(
+                    token0_address,
+                    token1_address,
+                    fee
+                ).build_transaction({
+                    'from': from_address,
+                    'nonce': web3.eth.get_transaction_count(from_address),
+                    'gas': 3000000,
+                    'gasPrice': web3.eth.gas_price,
+                    'chainId': web3.eth.chain_id
+                })
+                
+                # Sign and send transaction using our helper function
+                tx_hash = _sign_and_send_transaction(web3, create_pool_tx, account)
+                receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+                
+                # Get the pool address from the event logs or call getPool again
+                pool_address = factory_contract.functions.getPool(token0_address, token1_address, fee).call()
+                
+                if pool_address == '0x0000000000000000000000000000000000000000':
+                    return {
+                        "error": "Failed to create pool",
+                        "status": "error"
+                    }
+                
+                logger.info(f"Pool created at {pool_address}")
+                
+                # Initialize the pool with a price
+                pool_contract = _get_contract(pool_address, "v3_pool_abi")
+                
+                # Calculate initial sqrt price (assuming 1:1 for simplicity)
+                # In a real implementation, you would want to use a more accurate initial price
+                initial_price = 1.0  # 1 token0 = 1 token1
+                sqrt_price_x96 = int((initial_price ** 0.5) * (2 ** 96))
+                
+                # Initialize pool
+                init_tx = pool_contract.functions.initialize(sqrt_price_x96).build_transaction({
+                    'from': from_address,
+                    'nonce': web3.eth.get_transaction_count(from_address),
+                    'gas': 200000,
+                    'gasPrice': web3.eth.gas_price,
+                    'chainId': web3.eth.chain_id
+                })
+                
+                # Sign and send transaction using our helper function
+                tx_hash = _sign_and_send_transaction(web3, init_tx, account)
+                receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+                
+                logger.info(f"Pool initialized with sqrt price {sqrt_price_x96}")
+            
+            # Get pool information to determine ticks if not provided
+            pool_contract = _get_contract(pool_address)
+            if not pool_contract:
+                return {
+                    "error": f"Failed to get contract instance for pool {pool_address}",
+                    "status": "error"
+                }
+            
+            # Get current tick from pool
+            slot0 = pool_contract.functions.slot0().call()
+            current_tick = slot0[1]
+            
+            # If tick range not provided, use a standard range around the current tick
+            if tick_lower is None or tick_upper is None:
+                # Get tick spacing for this fee tier
+                tick_spacing = factory_contract.functions.feeAmountTickSpacing(fee).call()
+                
+                # Set a range of ±10% around the current price (simplified)
+                # In a real implementation, you would want to use a more sophisticated approach
+                if tick_lower is None:
+                    tick_lower = current_tick - (10 * tick_spacing)
+                    # Ensure tick_lower is a multiple of tick_spacing
+                    tick_lower = tick_lower - (tick_lower % tick_spacing)
+                
+                if tick_upper is None:
+                    tick_upper = current_tick + (10 * tick_spacing)
+                    # Ensure tick_upper is a multiple of tick_spacing
+                    tick_upper = tick_upper - (tick_upper % tick_spacing)
+            
+            # Check allowances and approve if needed
+            for token_address, token_contract, amount_wei in [
+                (token0_address, token0_contract, amount0_wei),
+                (token1_address, token1_contract, amount1_wei)
+            ]:
+                try:
+                    allowance = token_contract.functions.allowance(from_address, nft_manager_address).call()
+                    if allowance < amount_wei:
+                        # Approve position manager to spend tokens
+                        approve_tx = token_contract.functions.approve(
+                            nft_manager_address,
+                            2**256 - 1  # Max uint256 value
+                        ).build_transaction({
+                            'from': from_address,
+                            'nonce': web3.eth.get_transaction_count(from_address),
+                            'gas': 100000,
+                            'gasPrice': web3.eth.gas_price,
+                            'chainId': web3.eth.chain_id
+                        })
+                        
+                        # Sign and send approval transaction using our helper function
+                        tx_hash = _sign_and_send_transaction(web3, approve_tx, account)
+                        web3.eth.wait_for_transaction_receipt(tx_hash)
+                        
+                        logger.info(f"Approved position manager to spend {token_address}: {web3.to_hex(tx_hash)}")
+                except Exception as e:
+                    return {
+                        "error": f"Error approving tokens: {str(e)}",
+                        "status": "error"
+                    }
+            
+            # Calculate amount minimums based on slippage
+            amount0_min = int(amount0_wei * (1 - slippage / 100))
+            amount1_min = int(amount1_wei * (1 - slippage / 100))
+            
+            # Current timestamp plus 20 minutes
+            deadline = web3.eth.get_block('latest').timestamp + 1200
+            
+            # Build mint transaction
+            mint_params = {
+                'token0': token0_address,
+                'token1': token1_address,
+                'fee': fee,
+                'tickLower': tick_lower,
+                'tickUpper': tick_upper,
+                'amount0Desired': amount0_wei,
+                'amount1Desired': amount1_wei,
+                'amount0Min': amount0_min,
+                'amount1Min': amount1_min,
+                'recipient': from_address,
+                'deadline': deadline
+            }
+            
+            mint_tx = nft_manager_contract.functions.mint(mint_params).build_transaction({
+                'from': from_address,
+                'nonce': web3.eth.get_transaction_count(from_address),
+                'gas': 500000,
+                'gasPrice': web3.eth.gas_price,
+                'chainId': web3.eth.chain_id
+            })
+            
+            # Sign and send mint transaction using our helper function
+            tx_hash = _sign_and_send_transaction(web3, mint_tx, account)
+            logger.info(f"Mint transaction sent: {web3.to_hex(tx_hash)}")
+            
+            # Wait for receipt to get token ID
+            receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+            
+            # Try to extract token ID from event logs
+            token_id = None
+            for log in receipt.logs:
+                if log['address'].lower() == nft_manager_address.lower():
+                    # This is a simplified approach - in a real implementation, 
+                    # you would want to decode the event data properly
+                    try:
+                        # Get the IncreaseLiquidity event
+                        event_signature = web3.keccak(text="IncreaseLiquidity(uint256,uint128,uint256,uint256)").hex()
+                        if log['topics'][0].hex() == event_signature:
+                            token_id = int(log['topics'][1].hex(), 16)
+                            break
+                    except Exception:
+                        pass
+            
+            return {
+                "transaction_hash": web3.to_hex(tx_hash),
+                "from_address": from_address,
+                "pool_address": pool_address,
+                "token0": token0_address,
+                "token1": token1_address,
+                "amount0": amount0,
+                "amount1": amount1,
+                "amount0_wei": amount0_wei,
+                "amount1_wei": amount1_wei,
+                "tick_lower": tick_lower,
+                "tick_upper": tick_upper,
+                "token_id": token_id,
+                "status": "success"
+            }
+        except Exception as e:
+            return {
+                "error": f"Error adding liquidity: {str(e)}",
+                "status": "error"
+            }
+    except Exception as e:
+        error_msg = f"Error adding liquidity: {str(e)}"
+        logger.error(error_msg)
+        return {
+            "error": error_msg,
+            "status": "error"
+        }
+
+def create_pool(token0_address: str, token1_address: str, fee: int = 3000, initial_price: float = 1.0, private_key: str = None):
+    """
+    Create a new SparkDEX V3 pool.
+    
+    Args:
+        token0_address: The address of the first token in the pair
+        token1_address: The address of the second token in the pair
+        fee: The fee tier of the pool (default: 3000 = 0.3%)
+        initial_price: The initial price of token1 in terms of token0 (default: 1.0)
+        private_key: The private key to use for the transaction (default: uses environment variable)
+        
+    Returns:
+        A dictionary containing the transaction details
+    """
+    try:
+        # Validate addresses
+        if not Web3.is_address(token0_address):
+            return {
+                "error": f"Invalid token0 address: {token0_address}",
+                "status": "error"
+            }
+        
+        if not Web3.is_address(token1_address):
+            return {
+                "error": f"Invalid token1 address: {token1_address}",
+                "status": "error"
+            }
+        
+        # Get account from private key
+        account, from_address = _get_account_from_private_key(private_key)
+        if not account:
+            return {
+                "error": "Failed to get account from private key",
+                "status": "error"
+            }
+        
+        # Get Web3 connection
+        connection = get_evm_connection()
+        if not connection or not connection.connected:
+            return {
+                "error": "Failed to connect to Ethereum node",
+                "status": "error"
+            }
+        
+        web3 = connection.web3
+        
+        # Ensure PoA middleware is added
+        _ensure_poa_middleware(web3)
+        
+        # Get factory contract
+        factory_address = SPARKDEX_CONTRACTS["v3Factory"]
+        factory_contract = _get_contract(factory_address, "v3_factory_abi")
+        
+        if not factory_contract:
+            return {
+                "error": f"Failed to get contract instance for {factory_address}",
+                "status": "error"
+            }
+        
+        # Check if pool already exists
+        try:
+            existing_pool = factory_contract.functions.getPool(token0_address, token1_address, fee).call()
+            
+            if existing_pool != '0x0000000000000000000000000000000000000000':
+                return {
+                    "error": f"Pool already exists at {existing_pool}",
+                    "pool_address": existing_pool,
+                    "status": "error"
+                }
+            
+            # Create pool transaction
+            create_pool_tx = factory_contract.functions.createPool(
+                token0_address,
+                token1_address,
+                fee
+            ).build_transaction({
+                'from': from_address,
+                'nonce': web3.eth.get_transaction_count(from_address),
+                'gas': 3000000,
+                'gasPrice': web3.eth.gas_price,
+                'chainId': web3.eth.chain_id
+            })
+            
+            # Sign and send transaction using our helper function
+            tx_hash = _sign_and_send_transaction(web3, create_pool_tx, account)
+            receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+            
+            # Get the pool address
+            pool_address = factory_contract.functions.getPool(token0_address, token1_address, fee).call()
+            
+            if pool_address == '0x0000000000000000000000000000000000000000':
+                return {
+                    "error": "Failed to create pool",
+                    "status": "error"
+                }
+            
+            logger.info(f"Pool created at {pool_address}")
+            
+            # Initialize the pool with a price
+            pool_contract = _get_contract(pool_address, "v3_pool_abi")
+            
+            # Calculate sqrt price
+            # sqrtPriceX96 = sqrt(price) * 2^96
+            sqrt_price_x96 = int((initial_price ** 0.5) * (2 ** 96))
+            
+            # Initialize pool
+            init_tx = pool_contract.functions.initialize(sqrt_price_x96).build_transaction({
+                'from': from_address,
+                'nonce': web3.eth.get_transaction_count(from_address),
+                'gas': 200000,
+                'gasPrice': web3.eth.gas_price,
+                'chainId': web3.eth.chain_id
+            })
+            
+            # Sign and send transaction using our helper function
+            tx_hash = _sign_and_send_transaction(web3, init_tx, account)
+            receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+            
+            logger.info(f"Pool initialized with sqrt price {sqrt_price_x96}")
+            
+            # Get token information
+            token0_contract = _get_contract(token0_address)
+            token1_contract = _get_contract(token1_address)
+            
+            token0_symbol = token0_contract.functions.symbol().call() if token0_contract else "Unknown"
+            token1_symbol = token1_contract.functions.symbol().call() if token1_contract else "Unknown"
+            
+            return {
+                "transaction_hash": web3.to_hex(tx_hash),
+                "from_address": from_address,
+                "pool_address": pool_address,
+                "token0": {
+                    "address": token0_address,
+                    "symbol": token0_symbol
+                },
+                "token1": {
+                    "address": token1_address,
+                    "symbol": token1_symbol
+                },
+                "fee": fee,
+                "fee_percent": fee / 10000,
+                "initial_price": initial_price,
+                "sqrt_price_x96": sqrt_price_x96,
+                "status": "success"
+            }
+        except Exception as e:
+            return {
+                "error": f"Error creating pool: {str(e)}",
+                "status": "error"
+            }
+    except Exception as e:
+        error_msg = f"Error creating pool: {str(e)}"
+        logger.error(error_msg)
+        return {
+            "error": error_msg,
+            "status": "error"
+        }
+
+def get_pool_details_by_address(pool_address: str) -> dict:
+    """
+    Get detailed information about a SparkDEX V3 pool using its direct address.
+    
+    Args:
+        pool_address (str): The address of the SparkDEX V3 pool
+        
+    Returns:
+        dict: A dictionary containing detailed pool information
+    """
+    try:
+        # Validate the pool address
+        if not Web3.is_address(pool_address):
+            return {"error": f"Invalid pool address format: {pool_address}"}
+        
+        # Get the pool contract
+        pool_contract = _get_contract(pool_address, "v3_pool_abi")
+        
+        if not pool_contract:
+            return {"error": f"Could not get contract instance for pool: {pool_address}"}
+        
+        # Get basic pool information
+        token0_address = pool_contract.functions.token0().call()
+        token1_address = pool_contract.functions.token1().call()
+        fee = pool_contract.functions.fee().call()
+        liquidity = pool_contract.functions.liquidity().call()
+        tick_spacing = pool_contract.functions.tickSpacing().call()
+        factory_address = pool_contract.functions.factory().call()
+        
+        # Get slot0 data which contains current price and tick
+        slot0_data = pool_contract.functions.slot0().call()
+        sqrt_price_x96 = slot0_data[0]
+        current_tick = slot0_data[1]
+        
+        # Get token information
+        token0_contract = _get_contract(token0_address, "erc20")
+        token1_contract = _get_contract(token1_address, "erc20")
+        
+        # Try to get token symbols from our dictionary first
+        token0_symbol = get_token_by_address(token0_address) or "Unknown"
+        token1_symbol = get_token_by_address(token1_address) or "Unknown"
+        
+        # Get token decimals from our dictionary or from the contract
+        token0_decimals = 18
+        token1_decimals = 18
+        
+        # Try to get decimals from our dictionary first
+        if token0_symbol != "Unknown" and token0_symbol in TOKEN_INFO:
+            token0_decimals = TOKEN_INFO[token0_symbol]["decimals"]
+        elif token0_contract:
+            try:
+                token0_decimals = token0_contract.functions.decimals().call()
+            except Exception as e:
+                logging.error(f"Error getting token0 decimals: {e}")
+        
+        if token1_symbol != "Unknown" and token1_symbol in TOKEN_INFO:
+            token1_decimals = TOKEN_INFO[token1_symbol]["decimals"]
+        elif token1_contract:
+            try:
+                token1_decimals = token1_contract.functions.decimals().call()
+            except Exception as e:
+                logging.error(f"Error getting token1 decimals: {e}")
+        
+        # If we still don't have symbols, try to get them from the contract
+        if token0_symbol == "Unknown" and token0_contract:
+            try:
+                token0_symbol = token0_contract.functions.symbol().call()
+            except Exception as e:
+                logging.error(f"Error getting token0 symbol: {e}")
+        
+        if token1_symbol == "Unknown" and token1_contract:
+            try:
+                token1_symbol = token1_contract.functions.symbol().call()
+            except Exception as e:
+                logging.error(f"Error getting token1 symbol: {e}")
+        
+        # Calculate the price in token terms
+        price = calculate_price_from_sqrt_price_x96(sqrt_price_x96, token0_decimals, token1_decimals)
+        
+        # Estimate USD values
+        # Current prices in USD (these should be updated with real market data)
+        token_prices_usd = {
+            "WFLR": 0.0142,  # Current price of WFLR in USD
+            "USDT": 1.0,     # Stablecoin
+            "USDC": 1.0      # Stablecoin
+        }
+        
+        # Calculate USD values
+        usd_price = None
+        usd_liquidity_estimate = None
+        
+        # If we have USD prices for both tokens
+        if token0_symbol in token_prices_usd and token1_symbol in token_prices_usd:
+            token0_usd = token_prices_usd[token0_symbol]
+            token1_usd = token_prices_usd[token1_symbol]
+            
+            # Price in USD
+            usd_price = price * token1_usd / token0_usd
+        
+        # Format the result
+        result = {
+            "pool_address": pool_address,
+            "token0": {
+                "address": token0_address,
+                "symbol": token0_symbol,
+                "decimals": token0_decimals
+            },
+            "token1": {
+                "address": token1_address,
+                "symbol": token1_symbol,
+                "decimals": token1_decimals
+            },
+            "fee": fee,
+            "fee_percent": fee / 10000,
+            "liquidity": liquidity,
+            "tick_spacing": tick_spacing,
+            "current_tick": current_tick,
+            "sqrt_price_x96": sqrt_price_x96,
+            "price": price,
+            "price_description": f"1 {token0_symbol} = {price} {token1_symbol}",
+            "factory_address": factory_address
+        }
+        
+        # Add USD values if available
+        if usd_price is not None:
+            result["usd_price"] = usd_price
+            result["usd_price_description"] = f"1 {token0_symbol} ≈ ${usd_price:.6f} USD"
+        
+        return result
+    
+    except Exception as e:
+        logging.error(f"Error in get_pool_details_by_address: {e}")
+        return {"error": f"Failed to get pool details: {str(e)}"}
+
+def calculate_price_from_sqrt_price_x96(sqrt_price_x96: int, token0_decimals: int, token1_decimals: int) -> float:
+    """
+    Calculate the price from sqrtPriceX96 value.
+    
+    Args:
+        sqrt_price_x96 (int): The sqrtPriceX96 value from the pool
+        token0_decimals (int): Decimals for token0
+        token1_decimals (int): Decimals for token1
+        
+    Returns:
+        float: The price of token0 in terms of token1
+    """
+    try:
+        # Convert to decimal for precision
+        sqrt_price = Decimal(sqrt_price_x96) / Decimal(2**96)
+        price = sqrt_price * sqrt_price
+        
+        # Adjust for token decimals
+        decimal_adjustment = Decimal(10**(token1_decimals - token0_decimals))
+        adjusted_price = price * decimal_adjustment
+        
+        return float(adjusted_price)
+    except Exception as e:
+        logging.error(f"Error calculating price: {e}")
+        return 0
+
+def _sign_and_send_transaction(web3, tx, account):
+    """Sign and send a transaction."""
+    try:
+        _ensure_poa_middleware(web3)
+        
+        # Sign the transaction
+        signed_tx = web3.eth.account.sign_transaction(tx, private_key=account.key)
+        
+        # Send the transaction using the correct attribute name
+        if hasattr(signed_tx, 'raw_transaction'):
+            # For newer Web3.py versions with underscore
+            tx_hash = web3.eth.send_raw_transaction(signed_tx.raw_transaction)
+        elif hasattr(signed_tx, 'rawTransaction'):
+            # For versions without underscore
+            tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+        else:
+            # Fallback if neither attribute exists
+            raise Exception("Cannot find raw transaction data in signed transaction")
+        
+        # Return the transaction hash as a hexadecimal string
+        # Use to_hex instead of toHex for newer Web3.py versions
+        if hasattr(web3, 'to_hex'):
+            return web3.to_hex(tx_hash)
+        elif hasattr(web3, 'toHex'):
+            return web3.toHex(tx_hash)
+        else:
+            # Fallback if neither method exists
+            return tx_hash.hex() if hasattr(tx_hash, 'hex') else str(tx_hash)
+        
+    except Exception as e:
+        logging.error(f"Error signing/sending transaction: {str(e)}")
+        raise Exception(f"Error signing/sending transaction: {str(e)}")
+
+def _ensure_poa_middleware(web3: object) -> bool:
+    """Ensure that the POA middleware is injected into the web3 instance."""
+    try:
+        # Check if middleware is already in the stack
+        if ExtraDataToPOAMiddleware not in web3.middleware_onion:
+            # Use inject without specifying layer if it's not already present
+            web3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+        return True
+    except Exception as e:
+        # Alternative approach if the above fails
+        try:
+            # Try adding it without specifying the layer
+            web3.middleware_onion.add(ExtraDataToPOAMiddleware)
+            return True
+        except:
+            # If all else fails, try a different approach
+            try:
+                web3.middleware_onion.inject(ExtraDataToPOAMiddleware)
+                return True
+            except:
+                return False

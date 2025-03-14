@@ -99,7 +99,7 @@ When handling any transaction that involves user funds, you must:
         
         # Set up automatic function calling
         afc_responder = AutomaticFunctionCallingResponder(
-            max_automatic_function_calls=7,
+            max_automatic_function_calls=20,
         )
         
         # Start a chat session with the responder
