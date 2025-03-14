@@ -203,6 +203,7 @@ if [[ "$VM_CREATED" != "false" ]]; then
         --maintenance-policy=MIGRATE \
         --min-cpu-platform="AMD Milan" \
         --image-project=confidential-space-images \
+        --image-family=confidential-space \
         --service-account="$SERVICE_ACCOUNT_EMAIL" \
         --metadata="$METADATA"; then
         
