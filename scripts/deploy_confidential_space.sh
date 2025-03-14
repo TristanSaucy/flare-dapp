@@ -157,7 +157,6 @@ if [[ "$VM_CREATED" != "false" ]]; then
     
     # Start with required TEE metadata
     METADATA="^~^tee-image-reference=$CONTAINER_IMAGE"
-    METADATA="${METADATA}~tee-container-log-redirect=true"
     
     # Always add PROJECT_ID and REGION for Vertex AI
     METADATA="${METADATA}~PROJECT_ID=$PROJECT_ID"
@@ -204,7 +203,6 @@ if [[ "$VM_CREATED" != "false" ]]; then
         --maintenance-policy=MIGRATE \
         --min-cpu-platform="AMD Milan" \
         --image-project=confidential-space-images \
-        --image-family=confidential-space-debug \
         --service-account="$SERVICE_ACCOUNT_EMAIL" \
         --metadata="$METADATA"; then
         
